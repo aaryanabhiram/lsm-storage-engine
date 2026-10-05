@@ -1,0 +1,67 @@
+# lsm-store
+
+A persistent key-value storage engine in Python, built from scratch. It starts from a deliberately simple append-only baseline and evolves toward a log-structured merge-tree (LSM) design. Each architectural change is implemented, tested for correctness, benchmarked under a fixed methodology, and compared quantitatively with the previous version.
+
+## Engineering focus
+
+The project asks one question and answers it with measurements: **how much does each storage-engine technique actually buy, and what does it cost?**
+
+Every technique trades off some of these: write-path cost, read amplification, write amplification, space amplification, memory usage, latency, throughput, durability and implementation complexity. A technique that improves one doesn't improve all of them, so each step is evaluated on the metrics it's expected to move and on the ones it may make worse.
+
+The project covers on-disk record formats, durability and fsync semantics, crash recovery, and performance characterization.
+
+## Current status
+
+**V0 is implemented**: a persistent bytes-to-bytes store backed by a single append-only data file.
+
+- `put` and `delete` append checksummed records (CRC-32 per record); `delete` appends a tombstone.
+- `get` scans the whole file and returns the newest state of the key. There's no index yet.
+- Durability is configurable: every write is flushed to the OS, and with `sync=True` (default) it's also `fsync`ed.
+- Opening a store validates the file and truncates a torn trailing record left by a crash mid-append. A checksum failure in a complete record raises `CorruptionError`.
+- Single process, single writer, no file locking.
+
+The API, record format, invariants, durability policy and known limitations are specified in [docs/v0-design.md](docs/v0-design.md).
+
+## Architecture roadmap
+
+Planned sequence. Only V0 exists today. The later steps are intentions, not features, and the order may change as measurements dictate.
+
+| version | change | status |
+|---|---|---|
+| V0 | append-only persistent baseline | implemented |
+
+## Performance methodology
+
+No performance claim is made except what is measured. This version ships without benchmarks, so it makes no performance claim yet.
+
+## Usage
+
+```python
+from lsm_store import KVStore
+
+with KVStore("data.lsm") as db:       # sync=True: fsync after every write
+    db.put(b"user:42", b"Aaryan")
+    db.get(b"user:42")                # b"Aaryan"
+    db.delete(b"user:42")
+    db.get(b"user:42")                # None
+```
+
+Keys and values are `bytes`. Pass `sync=False` to skip the per-write `fsync` (writes then survive a process crash but not necessarily power loss).
+
+## Development
+
+Requires Python 3.10+.
+
+```bash
+python -m venv .venv
+# activate the venv, then:
+pip install -e ".[dev]"
+pytest                                # run the tests
+```
+
+## Repository layout
+
+- `src/lsm_store/`: the storage engine (`record.py`: record format; `store.py`: `KVStore`)
+- `tests/`: correctness tests
+- `docs/`: design documentation
+
