@@ -1,0 +1,271 @@
+{
+ "kind": "deterministic structural metrics (derived, not timed); file sizes cross-checked against measured values",
+ "overwrites_after_load": 1000,
+ "scales": {
+  "10000": {
+   "format": {
+    "header_bytes_per_record": 13,
+    "file_level_fixed_bytes": 0,
+    "key_bytes": 11,
+    "value_bytes": 100,
+    "user_bytes_per_record": 111,
+    "record_bytes": 124,
+    "overhead_fraction_of_record": 0.10483870967741936,
+    "bytes_appended_per_user_byte": 1.117117117117117
+   },
+   "after_load": {
+    "live_keys": 10000,
+    "physical_records": 10000,
+    "stale_records": 0,
+    "file_bytes": 1240000,
+    "physical_user_bytes": 1110000,
+    "live_user_bytes": 1110000,
+    "format_overhead_bytes": 130000,
+    "space_amplification": 1.117117117117117,
+    "staleness_factor": 1.0
+   },
+   "after_overwrites": {
+    "live_keys": 10000,
+    "physical_records": 11000,
+    "stale_records": 1000,
+    "file_bytes": 1364000,
+    "physical_user_bytes": 1221000,
+    "live_user_bytes": 1110000,
+    "format_overhead_bytes": 143000,
+    "space_amplification": 1.228828828828829,
+    "staleness_factor": 1.1
+   },
+   "get_scan_during_benchmark": {
+    "records_examined": 10000,
+    "bytes_scanned": 1240000,
+    "crc_checks": 10000,
+    "crc_covered_bytes": 1200000
+   },
+   "get_scan_after_overwrites": {
+    "records_examined": 11000,
+    "bytes_scanned": 1364000,
+    "crc_checks": 11000,
+    "crc_covered_bytes": 1320000
+   },
+   "open_recovery_as_benchmarked": {
+    "records_examined": 10000,
+    "bytes_scanned": 1240000,
+    "crc_checks": 10000,
+    "crc_covered_bytes": 1200000
+   },
+   "measured_open_recovery_seconds_median": 0.015649
+  },
+  "100000": {
+   "format": {
+    "header_bytes_per_record": 13,
+    "file_level_fixed_bytes": 0,
+    "key_bytes": 11,
+    "value_bytes": 100,
+    "user_bytes_per_record": 111,
+    "record_bytes": 124,
+    "overhead_fraction_of_record": 0.10483870967741936,
+    "bytes_appended_per_user_byte": 1.117117117117117
+   },
+   "after_load": {
+    "live_keys": 100000,
+    "physical_records": 100000,
+    "stale_records": 0,
+    "file_bytes": 12400000,
+    "physical_user_bytes": 11100000,
+    "live_user_bytes": 11100000,
+    "format_overhead_bytes": 1300000,
+    "space_amplification": 1.117117117117117,
+    "staleness_factor": 1.0
+   },
+   "after_overwrites": {
+    "live_keys": 100000,
+    "physical_records": 101000,
+    "stale_records": 1000,
+    "file_bytes": 12524000,
+    "physical_user_bytes": 11211000,
+    "live_user_bytes": 11100000,
+    "format_overhead_bytes": 1313000,
+    "space_amplification": 1.1282882882882883,
+    "staleness_factor": 1.01
+   },
+   "get_scan_during_benchmark": {
+    "records_examined": 100000,
+    "bytes_scanned": 12400000,
+    "crc_checks": 100000,
+    "crc_covered_bytes": 12000000
+   },
+   "get_scan_after_overwrites": {
+    "records_examined": 101000,
+    "bytes_scanned": 12524000,
+    "crc_checks": 101000,
+    "crc_covered_bytes": 12120000
+   },
+   "open_recovery_as_benchmarked": {
+    "records_examined": 100000,
+    "bytes_scanned": 12400000,
+    "crc_checks": 100000,
+    "crc_covered_bytes": 12000000
+   },
+   "measured_open_recovery_seconds_median": 0.0926246
+  },
+  "1000000": {
+   "format": {
+    "header_bytes_per_record": 13,
+    "file_level_fixed_bytes": 0,
+    "key_bytes": 11,
+    "value_bytes": 100,
+    "user_bytes_per_record": 111,
+    "record_bytes": 124,
+    "overhead_fraction_of_record": 0.10483870967741936,
+    "bytes_appended_per_user_byte": 1.117117117117117
+   },
+   "after_load": {
+    "live_keys": 1000000,
+    "physical_records": 1000000,
+    "stale_records": 0,
+    "file_bytes": 124000000,
+    "physical_user_bytes": 111000000,
+    "live_user_bytes": 111000000,
+    "format_overhead_bytes": 13000000,
+    "space_amplification": 1.117117117117117,
+    "staleness_factor": 1.0
+   },
+   "after_overwrites": {
+    "live_keys": 1000000,
+    "physical_records": 1001000,
+    "stale_records": 1000,
+    "file_bytes": 124124000,
+    "physical_user_bytes": 111111000,
+    "live_user_bytes": 111000000,
+    "format_overhead_bytes": 13013000,
+    "space_amplification": 1.1182342342342342,
+    "staleness_factor": 1.001
+   },
+   "get_scan_during_benchmark": {
+    "records_examined": 1000000,
+    "bytes_scanned": 124000000,
+    "crc_checks": 1000000,
+    "crc_covered_bytes": 120000000
+   },
+   "get_scan_after_overwrites": {
+    "records_examined": 1001000,
+    "bytes_scanned": 124124000,
+    "crc_checks": 1001000,
+    "crc_covered_bytes": 120120000
+   },
+   "open_recovery_as_benchmarked": {
+    "records_examined": 1000000,
+    "bytes_scanned": 124000000,
+    "crc_checks": 1000000,
+    "crc_covered_bytes": 120000000
+   },
+   "measured_open_recovery_seconds_median": 0.7884846
+  },
+  "5000000": {
+   "format": {
+    "header_bytes_per_record": 13,
+    "file_level_fixed_bytes": 0,
+    "key_bytes": 11,
+    "value_bytes": 100,
+    "user_bytes_per_record": 111,
+    "record_bytes": 124,
+    "overhead_fraction_of_record": 0.10483870967741936,
+    "bytes_appended_per_user_byte": 1.117117117117117
+   },
+   "after_load": {
+    "live_keys": 5000000,
+    "physical_records": 5000000,
+    "stale_records": 0,
+    "file_bytes": 620000000,
+    "physical_user_bytes": 555000000,
+    "live_user_bytes": 555000000,
+    "format_overhead_bytes": 65000000,
+    "space_amplification": 1.117117117117117,
+    "staleness_factor": 1.0
+   },
+   "after_overwrites": {
+    "live_keys": 5000000,
+    "physical_records": 5001000,
+    "stale_records": 1000,
+    "file_bytes": 620124000,
+    "physical_user_bytes": 555111000,
+    "live_user_bytes": 555000000,
+    "format_overhead_bytes": 65013000,
+    "space_amplification": 1.1173405405405405,
+    "staleness_factor": 1.0002
+   },
+   "get_scan_during_benchmark": {
+    "records_examined": 5000000,
+    "bytes_scanned": 620000000,
+    "crc_checks": 5000000,
+    "crc_covered_bytes": 600000000
+   },
+   "get_scan_after_overwrites": {
+    "records_examined": 5001000,
+    "bytes_scanned": 620124000,
+    "crc_checks": 5001000,
+    "crc_covered_bytes": 600120000
+   },
+   "open_recovery_as_benchmarked": {
+    "records_examined": 5000000,
+    "bytes_scanned": 620000000,
+    "crc_checks": 5000000,
+    "crc_covered_bytes": 600000000
+   },
+   "measured_open_recovery_seconds_median": 3.8365404
+  },
+  "10000000": {
+   "format": {
+    "header_bytes_per_record": 13,
+    "file_level_fixed_bytes": 0,
+    "key_bytes": 11,
+    "value_bytes": 100,
+    "user_bytes_per_record": 111,
+    "record_bytes": 124,
+    "overhead_fraction_of_record": 0.10483870967741936,
+    "bytes_appended_per_user_byte": 1.117117117117117
+   },
+   "after_load": {
+    "live_keys": 10000000,
+    "physical_records": 10000000,
+    "stale_records": 0,
+    "file_bytes": 1240000000,
+    "physical_user_bytes": 1110000000,
+    "live_user_bytes": 1110000000,
+    "format_overhead_bytes": 130000000,
+    "space_amplification": 1.117117117117117,
+    "staleness_factor": 1.0
+   },
+   "after_overwrites": {
+    "live_keys": 10000000,
+    "physical_records": 10001000,
+    "stale_records": 1000,
+    "file_bytes": 1240124000,
+    "physical_user_bytes": 1110111000,
+    "live_user_bytes": 1110000000,
+    "format_overhead_bytes": 130013000,
+    "space_amplification": 1.1172288288288288,
+    "staleness_factor": 1.0001
+   },
+   "get_scan_during_benchmark": {
+    "records_examined": 10000000,
+    "bytes_scanned": 1240000000,
+    "crc_checks": 10000000,
+    "crc_covered_bytes": 1200000000
+   },
+   "get_scan_after_overwrites": {
+    "records_examined": 10001000,
+    "bytes_scanned": 1240124000,
+    "crc_checks": 10001000,
+    "crc_covered_bytes": 1200120000
+   },
+   "open_recovery_as_benchmarked": {
+    "records_examined": 10000000,
+    "bytes_scanned": 1240000000,
+    "crc_checks": 10000000,
+    "crc_covered_bytes": 1200000000
+   },
+   "measured_open_recovery_seconds_median": 7.8114976
+  }
+ }
+}

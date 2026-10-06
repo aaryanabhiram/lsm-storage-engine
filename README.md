@@ -32,7 +32,9 @@ Planned sequence. Only V0 exists today. The later steps are intentions, not feat
 
 ## Performance methodology
 
-No performance claim is made except what is measured. This version ships without benchmarks, so it makes no performance claim yet.
+No performance claim is made except what is measured. Benchmarks live in `benchmarks/`, use deterministic seeded workloads, a fresh database per run, multiple independent runs, and per-operation latency timing. The same workload definition is meant to be reused for every version so results are comparable. Benchmarks run with a warm OS page cache, and cold-cache performance isn't claimed. Physical I/O isn't measured for V0. Its scan work, space amplification and record-format overhead are derived from the record format (`benchmarks/structural.py`).
+
+Methodology, workloads, results and limitations are documented in [docs/benchmarks.md](docs/benchmarks.md). V0 has a small-dataset baseline benchmark and a scaling characterization that measures how GET latency, PUT latency and open/recovery time change as the database grows, plus derived structural metrics (records and bytes scanned per GET, space amplification, record-format overhead, recovery work). These are the quantitative baseline for later versions.
 
 ## Usage
 
@@ -63,5 +65,6 @@ pytest                                # run the tests
 
 - `src/lsm_store/`: the storage engine (`record.py`: record format; `store.py`: `KVStore`)
 - `tests/`: correctness tests
-- `docs/`: design documentation
+- `benchmarks/`: benchmark scripts and result JSON
+- `docs/`: design and benchmark documentation
 
