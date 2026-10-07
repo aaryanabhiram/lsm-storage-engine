@@ -9,7 +9,7 @@ from lsm_store.record import OP_PUT, encode
 
 @pytest.fixture
 def path(tmp_path):
-    return str(tmp_path / "data.lsm")
+    return str(tmp_path / "data.wal")
 
 
 def test_put_then_get(path):
@@ -130,3 +130,15 @@ def test_random_ops_match_a_dict(path):
         key = b"k%d" % n
         assert db.get(key) == expected.get(key)
     db.close()
+
+
+def test_wal_only_grows(path):
+    sizes = []
+    with KVStore(path) as db:
+        db.put(b"k", b"v1")
+        sizes.append(os.path.getsize(path))
+        db.put(b"k", b"v2")  # overwrite is a new record, not an in-place edit
+        sizes.append(os.path.getsize(path))
+        db.delete(b"k")
+        sizes.append(os.path.getsize(path))
+    assert sizes[0] < sizes[1] < sizes[2]
