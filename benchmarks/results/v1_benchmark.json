@@ -1,0 +1,6467 @@
+{
+ "metadata": {
+  "benchmark": "v1",
+  "command": "python benchmarks/bench.py --baseline --out <result file>",
+  "python": "3.10.6 (tags/v3.10.6:9c7b4bd, Aug  1 2022, 21:53:49) [MSC v.1932 64 bit (AMD64)]",
+  "platform": "Windows-10-10.0.26300-SP0",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "cpu_count": 24,
+  "ram_total_bytes": 16961626112,
+  "ram_available_bytes_at_start": 6815404032,
+  "disk_free_bytes_at_start": 183186157568,
+  "perf_counter_clock": {
+   "implementation": "QueryPerformanceCounter()",
+   "monotonic": "True",
+   "adjustable": "False",
+   "resolution": "1e-07"
+  },
+  "cache_condition": "WARM OS page cache. No cold-cache measurement is made or claimed.",
+  "params": {
+   "seed": 42,
+   "key_size_bytes": 11,
+   "value_size_bytes": 100,
+   "record_bytes": 124,
+   "delete_record_bytes": 24,
+   "store_sync": false,
+   "runs_per_scale": {
+    "10000": 5,
+    "100000": 5,
+    "1000000": 5,
+    "5000000": 3,
+    "10000000": 3
+   },
+   "gets_per_kind_per_run": 100000,
+   "v0_gets_per_kind": {
+    "10000": 200,
+    "100000": 200,
+    "1000000": 100,
+    "5000000": 50,
+    "10000000": 50
+   },
+   "n_overwrites": 1000,
+   "n_deletes": 1000,
+   "memory_probes_per_scale": 3,
+   "baseline_runs": 5,
+   "baseline_extended": {
+    "n_get_ops": 200000,
+    "n_mixed_ops": 100000
+   }
+  },
+  "timing_notes": "Only store calls are timed. Percentiles are nearest-rank (same code as V0). Raw per-operation latencies are not stored; get/overwrite/delete percentiles are pooled over all runs at a scale, and the per-run values are kept. open_recovery is the first KVStore(path) after close() in the same process.",
+  "combined_from_commands": [
+   "python benchmarks/bench.py --baseline --out <result file>",
+   "python benchmarks/bench.py --scales 10000 --out <result file>",
+   "python benchmarks/bench.py --scales 100000 --out <result file>",
+   "python benchmarks/bench.py --scales 1000000 --out <result file>",
+   "python benchmarks/bench.py --scales 5000000 --out <result file>",
+   "python benchmarks/bench.py --scales 10000000 --out <result file>"
+  ]
+ },
+ "status": "complete",
+ "scales": {
+  "10000": {
+   "records": 10000,
+   "gets_per_kind": 100000,
+   "runs_planned": 5,
+   "runs_completed": 5,
+   "file_bytes_after_load": [
+    1240000,
+    1240000,
+    1240000,
+    1240000,
+    1240000
+   ],
+   "file_bytes_final": [
+    1388000,
+    1388000,
+    1388000,
+    1388000,
+    1388000
+   ],
+   "open_recovery_seconds": [
+    0.0185318,
+    0.0198552,
+    0.0198233,
+    0.0207915,
+    0.0178343
+   ],
+   "open_recovery_seconds_median": 0.0198233,
+   "open_recovery_final_seconds": [
+    0.0170665,
+    0.0199313,
+    0.0220799,
+    0.0184954,
+    0.0168338
+   ],
+   "load_wall_seconds": [
+    0.0625264000000243,
+    0.06704109999998309,
+    0.06181859999992412,
+    0.06103640000003452,
+    0.061884500000019216
+   ],
+   "aggregate_over_runs": {
+    "get_hit": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.5
+     },
+     "p95_us": {
+      "median": 0.6,
+      "min": 0.6,
+      "max": 0.7
+     },
+     "p99_us": {
+      "median": 0.7,
+      "min": 0.7,
+      "max": 0.9
+     },
+     "throughput_ops_per_s": {
+      "median": 2110835.7643125216,
+      "min": 1960115.5684139137,
+      "max": 2177999.1592923244
+     },
+     "mean_us": {
+      "median": 0.473746,
+      "min": 0.459137,
+      "max": 0.510174
+     },
+     "min_us": {
+      "median": 0.3,
+      "min": 0.3,
+      "max": 0.3
+     },
+     "max_us": {
+      "median": 298.9,
+      "min": 108.7,
+      "max": 1110.6
+     }
+    },
+    "get_miss": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.4
+     },
+     "p95_us": {
+      "median": 0.5,
+      "min": 0.5,
+      "max": 0.7
+     },
+     "p99_us": {
+      "median": 0.7,
+      "min": 0.6,
+      "max": 0.9
+     },
+     "throughput_ops_per_s": {
+      "median": 2260934.4442057903,
+      "min": 2180192.9470758163,
+      "max": 2361643.13682888
+     },
+     "mean_us": {
+      "median": 0.442295,
+      "min": 0.42343400000000003,
+      "max": 0.458675
+     },
+     "min_us": {
+      "median": 0.3,
+      "min": 0.2,
+      "max": 0.3
+     },
+     "max_us": {
+      "median": 266.1,
+      "min": 116.3,
+      "max": 287.9
+     }
+    },
+    "control_noop": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p95_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.2
+     },
+     "p99_us": {
+      "median": 0.2,
+      "min": 0.1,
+      "max": 0.2
+     },
+     "throughput_ops_per_s": {
+      "median": 11634129.88342602,
+      "min": 9727153.348572541,
+      "max": 11900936.603710711
+     },
+     "mean_us": {
+      "median": 0.08595399999999999,
+      "min": 0.084027,
+      "max": 0.10280500000000001
+     },
+     "min_us": {
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+     },
+     "max_us": {
+      "median": 46.5,
+      "min": 24.2,
+      "max": 127.6
+     }
+    },
+    "control_dict_get": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p95_us": {
+      "median": 0.2,
+      "min": 0.2,
+      "max": 0.3
+     },
+     "p99_us": {
+      "median": 0.3,
+      "min": 0.3,
+      "max": 0.4
+     },
+     "throughput_ops_per_s": {
+      "median": 8393486.65435622,
+      "min": 6800916.76357973,
+      "max": 9208611.893843122
+     },
+     "mean_us": {
+      "median": 0.11914,
+      "min": 0.108594,
+      "max": 0.14703899999999998
+     },
+     "min_us": {
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+     },
+     "max_us": {
+      "median": 178.9,
+      "min": 9.3,
+      "max": 377.9
+     }
+    },
+    "put_overwrite": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 4.8,
+      "min": 4.7,
+      "max": 5.4
+     },
+     "p95_us": {
+      "median": 5.5,
+      "min": 5.3,
+      "max": 6.5
+     },
+     "p99_us": {
+      "median": 14.2,
+      "min": 12.8,
+      "max": 22.0
+     },
+     "throughput_ops_per_s": {
+      "median": 192296.59827317655,
+      "min": 171694.45255223804,
+      "max": 195790.5041605482
+     },
+     "mean_us": {
+      "median": 5.2003,
+      "min": 5.1075,
+      "max": 5.8243
+     },
+     "min_us": {
+      "median": 4.4,
+      "min": 4.3,
+      "max": 5.0
+     },
+     "max_us": {
+      "median": 93.4,
+      "min": 87.3,
+      "max": 124.1
+     }
+    },
+    "delete": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 4.5,
+      "min": 4.3,
+      "max": 5.1
+     },
+     "p95_us": {
+      "median": 4.8,
+      "min": 4.7,
+      "max": 5.6
+     },
+     "p99_us": {
+      "median": 7.1,
+      "min": 6.5,
+      "max": 33.7
+     },
+     "throughput_ops_per_s": {
+      "median": 215183.33620244448,
+      "min": 175561.797752809,
+      "max": 220084.9527917776
+     },
+     "mean_us": {
+      "median": 4.6472,
+      "min": 4.543699999999999,
+      "max": 5.696
+     },
+     "min_us": {
+      "median": 4.3,
+      "min": 4.1,
+      "max": 4.8
+     },
+     "max_us": {
+      "median": 43.0,
+      "min": 19.5,
+      "max": 100.3
+     }
+    },
+    "put_load": {
+     "ops": {
+      "median": 10000,
+      "min": 10000,
+      "max": 10000
+     },
+     "p50_us": {
+      "median": 4.7,
+      "min": 4.5,
+      "max": 4.8
+     },
+     "p95_us": {
+      "median": 5.6,
+      "min": 5.3,
+      "max": 7.4
+     },
+     "p99_us": {
+      "median": 15.2,
+      "min": 9.6,
+      "max": 18.8
+     },
+     "throughput_ops_per_s": {
+      "median": 194313.98419450055,
+      "min": 183443.4911497688,
+      "max": 196742.34032883513
+     },
+     "mean_us": {
+      "median": 5.146310000000001,
+      "min": 5.08279,
+      "max": 5.45127
+     },
+     "min_us": {
+      "median": 4.1,
+      "min": 3.7,
+      "max": 4.2
+     },
+     "max_us": {
+      "median": 403.2,
+      "min": 170.5,
+      "max": 1177.8
+     }
+    }
+   },
+   "pooled_all_runs": {
+    "get_hit": {
+     "ops": 500000,
+     "p50_us": 0.4,
+     "p95_us": 0.6,
+     "p99_us": 0.8,
+     "throughput_ops_per_s": 2097112.2345108339,
+     "mean_us": 0.4768462,
+     "min_us": 0.3,
+     "max_us": 1110.6
+    },
+    "get_miss": {
+     "ops": 500000,
+     "p50_us": 0.4,
+     "p95_us": 0.6,
+     "p99_us": 0.8,
+     "throughput_ops_per_s": 2271551.228704775,
+     "mean_us": 0.4402278,
+     "min_us": 0.2,
+     "max_us": 287.9
+    },
+    "control_noop": {
+     "ops": 500000,
+     "p50_us": 0.1,
+     "p95_us": 0.1,
+     "p99_us": 0.2,
+     "throughput_ops_per_s": 11088121.738706192,
+     "mean_us": 0.09018659999999999,
+     "min_us": 0.0,
+     "max_us": 127.6
+    },
+    "control_dict_get": {
+     "ops": 500000,
+     "p50_us": 0.1,
+     "p95_us": 0.2,
+     "p99_us": 0.3,
+     "throughput_ops_per_s": 8079959.277005244,
+     "mean_us": 0.12376300000000001,
+     "min_us": 0.0,
+     "max_us": 377.9
+    },
+    "put_overwrite": {
+     "ops": 5000,
+     "p50_us": 4.9,
+     "p95_us": 5.9,
+     "p99_us": 16.1,
+     "throughput_ops_per_s": 185251.73858756665,
+     "mean_us": 5.39806,
+     "min_us": 4.3,
+     "max_us": 124.1
+    },
+    "delete": {
+     "ops": 5000,
+     "p50_us": 4.6,
+     "p95_us": 5.4,
+     "p99_us": 7.6,
+     "throughput_ops_per_s": 202597.2973520533,
+     "mean_us": 4.935899999999999,
+     "min_us": 4.1,
+     "max_us": 100.3
+    }
+   },
+   "runs": [
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2148541.569982296,
+       "mean_us": 0.465432,
+       "min_us": 0.3,
+       "max_us": 482.2
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 2338995.261195601,
+       "mean_us": 0.42753399999999997,
+       "min_us": 0.2,
+       "max_us": 116.3
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 10826260.176684566,
+       "mean_us": 0.09236799999999999,
+       "min_us": 0.0,
+       "max_us": 44.2
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.2,
+       "p99_us": 0.3,
+       "throughput_ops_per_s": 8416870.77578298,
+       "mean_us": 0.118809,
+       "min_us": 0.0,
+       "max_us": 288.1
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 5.3,
+       "p95_us": 6.5,
+       "p99_us": 14.1,
+       "throughput_ops_per_s": 174886.32388947185,
+       "mean_us": 5.718,
+       "min_us": 5.0,
+       "max_us": 93.4
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.0,
+       "p95_us": 5.6,
+       "p99_us": 33.7,
+       "throughput_ops_per_s": 175561.797752809,
+       "mean_us": 5.696,
+       "min_us": 4.7,
+       "max_us": 100.3
+      },
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.7,
+       "p95_us": 5.6,
+       "p99_us": 9.7,
+       "throughput_ops_per_s": 193526.1628019492,
+       "mean_us": 5.167260000000001,
+       "min_us": 4.1,
+       "max_us": 1177.8
+      }
+     },
+     "open_recovery_ns": 18531800,
+     "open_recovery_final_ns": 17066500,
+     "load_wall_seconds": 0.0625264000000243,
+     "file_bytes_after_load": 1240000,
+     "file_bytes_final": 1388000,
+     "memtable_entries": 10000,
+     "tombstoned_keys_final": 961,
+     "records_replayed_at_open": 10000,
+     "records_replayed_at_final_reopen": 12000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2177999.1592923244,
+       "mean_us": 0.459137,
+       "min_us": 0.3,
+       "max_us": 108.7
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.8,
+       "throughput_ops_per_s": 2226174.9194681225,
+       "mean_us": 0.449201,
+       "min_us": 0.3,
+       "max_us": 266.1
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 11657864.978607818,
+       "mean_us": 0.085779,
+       "min_us": 0.0,
+       "max_us": 24.2
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.2,
+       "p99_us": 0.3,
+       "throughput_ops_per_s": 7985115.744252713,
+       "mean_us": 0.125233,
+       "min_us": 0.0,
+       "max_us": 377.9
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.7,
+       "p95_us": 5.3,
+       "p99_us": 12.8,
+       "throughput_ops_per_s": 195790.5041605482,
+       "mean_us": 5.1075,
+       "min_us": 4.4,
+       "max_us": 124.1
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.5,
+       "p95_us": 4.8,
+       "p99_us": 6.5,
+       "throughput_ops_per_s": 215183.33620244448,
+       "mean_us": 4.6472,
+       "min_us": 4.3,
+       "max_us": 43.0
+      },
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.8,
+       "p95_us": 7.4,
+       "p99_us": 15.8,
+       "throughput_ops_per_s": 183443.4911497688,
+       "mean_us": 5.45127,
+       "min_us": 4.2,
+       "max_us": 403.2
+      }
+     },
+     "open_recovery_ns": 19855200,
+     "open_recovery_final_ns": 19931300,
+     "load_wall_seconds": 0.06704109999998309,
+     "file_bytes_after_load": 1240000,
+     "file_bytes_final": 1388000,
+     "memtable_entries": 10000,
+     "tombstoned_keys_final": 961,
+     "records_replayed_at_open": 10000,
+     "records_replayed_at_final_reopen": 12000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 0.8,
+       "throughput_ops_per_s": 2101979.6444291235,
+       "mean_us": 0.475742,
+       "min_us": 0.3,
+       "max_us": 298.9
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2361643.13682888,
+       "mean_us": 0.42343400000000003,
+       "min_us": 0.3,
+       "max_us": 147.5
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 11634129.88342602,
+       "mean_us": 0.08595399999999999,
+       "min_us": 0.0,
+       "max_us": 61.2
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.2,
+       "p99_us": 0.3,
+       "throughput_ops_per_s": 8393486.65435622,
+       "mean_us": 0.11914,
+       "min_us": 0.0,
+       "max_us": 178.9
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.7,
+       "p95_us": 5.3,
+       "p99_us": 22.0,
+       "throughput_ops_per_s": 194544.9593401035,
+       "mean_us": 5.1402,
+       "min_us": 4.3,
+       "max_us": 91.9
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.5,
+       "p95_us": 4.8,
+       "p99_us": 6.5,
+       "throughput_ops_per_s": 216619.01048436013,
+       "mean_us": 4.6164,
+       "min_us": 4.2,
+       "max_us": 29.2
+      },
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.6,
+       "p95_us": 5.5,
+       "p99_us": 15.2,
+       "throughput_ops_per_s": 196742.34032883513,
+       "mean_us": 5.08279,
+       "min_us": 3.9,
+       "max_us": 415.8
+      }
+     },
+     "open_recovery_ns": 19823300,
+     "open_recovery_final_ns": 22079900,
+     "load_wall_seconds": 0.06181859999992412,
+     "file_bytes_after_load": 1240000,
+     "file_bytes_final": 1388000,
+     "memtable_entries": 10000,
+     "tombstoned_keys_final": 961,
+     "records_replayed_at_open": 10000,
+     "records_replayed_at_final_reopen": 12000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 1960115.5684139137,
+       "mean_us": 0.510174,
+       "min_us": 0.3,
+       "max_us": 1110.6
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 2180192.9470758163,
+       "mean_us": 0.458675,
+       "min_us": 0.3,
+       "max_us": 287.9
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.2,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 9727153.348572541,
+       "mean_us": 0.10280500000000001,
+       "min_us": 0.0,
+       "max_us": 46.5
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.3,
+       "p99_us": 0.4,
+       "throughput_ops_per_s": 6800916.76357973,
+       "mean_us": 0.14703899999999998,
+       "min_us": 0.0,
+       "max_us": 9.3
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 5.4,
+       "p95_us": 6.1,
+       "p99_us": 19.4,
+       "throughput_ops_per_s": 171694.45255223804,
+       "mean_us": 5.8243,
+       "min_us": 5.0,
+       "max_us": 104.0
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.1,
+       "p95_us": 5.5,
+       "p99_us": 7.1,
+       "throughput_ops_per_s": 193191.916850199,
+       "mean_us": 5.1762,
+       "min_us": 4.8,
+       "max_us": 19.5
+      },
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.5,
+       "p95_us": 5.3,
+       "p99_us": 18.8,
+       "throughput_ops_per_s": 196551.31070241542,
+       "mean_us": 5.08773,
+       "min_us": 3.7,
+       "max_us": 402.7
+      }
+     },
+     "open_recovery_ns": 20791500,
+     "open_recovery_final_ns": 18495400,
+     "load_wall_seconds": 0.06103640000003452,
+     "file_bytes_after_load": 1240000,
+     "file_bytes_final": 1388000,
+     "memtable_entries": 10000,
+     "tombstoned_keys_final": 961,
+     "records_replayed_at_open": 10000,
+     "records_replayed_at_final_reopen": 12000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.6,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2110835.7643125216,
+       "mean_us": 0.473746,
+       "min_us": 0.3,
+       "max_us": 171.1
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 2260934.4442057903,
+       "mean_us": 0.442295,
+       "min_us": 0.2,
+       "max_us": 267.5
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 11900936.603710711,
+       "mean_us": 0.084027,
+       "min_us": 0.0,
+       "max_us": 127.6
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.2,
+       "p99_us": 0.3,
+       "throughput_ops_per_s": 9208611.893843122,
+       "mean_us": 0.108594,
+       "min_us": 0.0,
+       "max_us": 104.9
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.8,
+       "p95_us": 5.5,
+       "p99_us": 14.2,
+       "throughput_ops_per_s": 192296.59827317655,
+       "mean_us": 5.2003,
+       "min_us": 4.4,
+       "max_us": 87.3
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.3,
+       "p95_us": 4.7,
+       "p99_us": 8.0,
+       "throughput_ops_per_s": 220084.9527917776,
+       "mean_us": 4.543699999999999,
+       "min_us": 4.1,
+       "max_us": 51.4
+      },
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.8,
+       "p95_us": 5.6,
+       "p99_us": 9.6,
+       "throughput_ops_per_s": 194313.98419450055,
+       "mean_us": 5.146310000000001,
+       "min_us": 4.1,
+       "max_us": 170.5
+      }
+     },
+     "open_recovery_ns": 17834300,
+     "open_recovery_final_ns": 16833800,
+     "load_wall_seconds": 0.061884500000019216,
+     "file_bytes_after_load": 1240000,
+     "file_bytes_final": 1388000,
+     "memtable_entries": 10000,
+     "tombstoned_keys_final": 961,
+     "records_replayed_at_open": 10000,
+     "records_replayed_at_final_reopen": 12000
+    }
+   ],
+   "memory_probes": [
+    {
+     "load": {
+      "private_delta": 2404352,
+      "working_set_delta": 2478080,
+      "peak_working_set_after": 22786048,
+      "private_after": 14872576,
+      "private_before": 12468224
+     },
+     "open": {
+      "private_delta": 2678784,
+      "working_set_delta": 2486272,
+      "peak_working_set_after": 22663168,
+      "private_after": 14548992,
+      "private_before": 11870208
+     }
+    },
+    {
+     "load": {
+      "private_delta": 2404352,
+      "working_set_delta": 2449408,
+      "peak_working_set_after": 22790144,
+      "private_after": 14893056,
+      "private_before": 12488704
+     },
+     "open": {
+      "private_delta": 2691072,
+      "working_set_delta": 2486272,
+      "peak_working_set_after": 22818816,
+      "private_after": 14831616,
+      "private_before": 12140544
+     }
+    },
+    {
+     "load": {
+      "private_delta": 2404352,
+      "working_set_delta": 2449408,
+      "peak_working_set_after": 22859776,
+      "private_after": 14938112,
+      "private_before": 12533760
+     },
+     "open": {
+      "private_delta": 2408448,
+      "working_set_delta": 2433024,
+      "peak_working_set_after": 22867968,
+      "private_after": 14888960,
+      "private_before": 12480512
+     }
+    }
+   ],
+   "v0_delete": {
+    "runs_completed": 5,
+    "aggregate_over_runs": {
+     "delete": {
+      "ops": {
+       "median": 1000,
+       "min": 1000,
+       "max": 1000
+      },
+      "p50_us": {
+       "median": 4.1,
+       "min": 4.1,
+       "max": 4.7
+      },
+      "p95_us": {
+       "median": 4.5,
+       "min": 4.4,
+       "max": 5.1
+      },
+      "p99_us": {
+       "median": 6.6,
+       "min": 5.1,
+       "max": 15.6
+      },
+      "throughput_ops_per_s": {
+       "median": 225149.16131937408,
+       "min": 207770.6212341575,
+       "max": 240807.1856864209
+      },
+      "mean_us": {
+       "median": 4.4415,
+       "min": 4.152699999999999,
+       "max": 4.813
+      },
+      "min_us": {
+       "median": 3.9,
+       "min": 3.8,
+       "max": 4.4
+      },
+      "max_us": {
+       "median": 35.9,
+       "min": 7.1,
+       "max": 87.2
+      }
+     }
+    },
+    "pooled_all_runs": {
+     "delete": {
+      "ops": 5000,
+      "p50_us": 4.2,
+      "p95_us": 4.9,
+      "p99_us": 6.6,
+      "throughput_ops_per_s": 226336.51713367435,
+      "mean_us": 4.4182,
+      "min_us": 3.8,
+      "max_us": 87.2
+     }
+    },
+    "runs": [
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.1,
+        "p95_us": 4.5,
+        "p99_us": 15.6,
+        "throughput_ops_per_s": 225149.16131937408,
+        "mean_us": 4.4415,
+        "min_us": 3.8,
+        "max_us": 87.2
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.2,
+        "p95_us": 4.7,
+        "p99_us": 11.4,
+        "throughput_ops_per_s": 220701.83182520414,
+        "mean_us": 4.531,
+        "min_us": 3.9,
+        "max_us": 45.6
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.7,
+        "p95_us": 5.1,
+        "p99_us": 6.6,
+        "throughput_ops_per_s": 207770.6212341575,
+        "mean_us": 4.813,
+        "min_us": 4.4,
+        "max_us": 35.9
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.1,
+        "p95_us": 4.5,
+        "p99_us": 5.2,
+        "throughput_ops_per_s": 240801.38701598922,
+        "mean_us": 4.1528,
+        "min_us": 3.9,
+        "max_us": 8.1
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.1,
+        "p95_us": 4.4,
+        "p99_us": 5.1,
+        "throughput_ops_per_s": 240807.1856864209,
+        "mean_us": 4.152699999999999,
+        "min_us": 3.8,
+        "max_us": 7.1
+       }
+      }
+     }
+    ]
+   }
+  },
+  "100000": {
+   "records": 100000,
+   "gets_per_kind": 100000,
+   "runs_planned": 5,
+   "runs_completed": 5,
+   "file_bytes_after_load": [
+    12400000,
+    12400000,
+    12400000,
+    12400000,
+    12400000
+   ],
+   "file_bytes_final": [
+    12548000,
+    12548000,
+    12548000,
+    12548000,
+    12548000
+   ],
+   "open_recovery_seconds": [
+    0.1023031,
+    0.1026836,
+    0.1067919,
+    0.1050798,
+    0.1099285
+   ],
+   "open_recovery_seconds_median": 0.1050798,
+   "open_recovery_final_seconds": [
+    0.1134709,
+    0.1084846,
+    0.1167033,
+    0.1080035,
+    0.1069408
+   ],
+   "load_wall_seconds": [
+    0.5939743999999791,
+    0.6415838000000349,
+    0.6179532999999537,
+    0.6248129999999037,
+    0.5921747999999525
+   ],
+   "aggregate_over_runs": {
+    "get_hit": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.5,
+      "min": 0.5,
+      "max": 0.5
+     },
+     "p95_us": {
+      "median": 0.8,
+      "min": 0.7,
+      "max": 0.8
+     },
+     "p99_us": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.1
+     },
+     "throughput_ops_per_s": {
+      "median": 1723026.8757732082,
+      "min": 1677056.028764865,
+      "max": 1754112.0772370629
+     },
+     "mean_us": {
+      "median": 0.5803740000000001,
+      "min": 0.5700890000000001,
+      "max": 0.596283
+     },
+     "min_us": {
+      "median": 0.3,
+      "min": 0.2,
+      "max": 0.3
+     },
+     "max_us": {
+      "median": 258.4,
+      "min": 243.2,
+      "max": 434.5
+     }
+    },
+    "get_miss": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.4
+     },
+     "p95_us": {
+      "median": 0.6,
+      "min": 0.5,
+      "max": 0.6
+     },
+     "p99_us": {
+      "median": 0.7,
+      "min": 0.7,
+      "max": 0.8
+     },
+     "throughput_ops_per_s": {
+      "median": 2279633.526114342,
+      "min": 2239591.4985106713,
+      "max": 2505643.963026718
+     },
+     "mean_us": {
+      "median": 0.438667,
+      "min": 0.399099,
+      "max": 0.44651
+     },
+     "min_us": {
+      "median": 0.2,
+      "min": 0.2,
+      "max": 0.2
+     },
+     "max_us": {
+      "median": 219.7,
+      "min": 140.3,
+      "max": 320.9
+     }
+    },
+    "control_noop": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p95_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p99_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.2
+     },
+     "throughput_ops_per_s": {
+      "median": 11551345.731777752,
+      "min": 10763683.33243636,
+      "max": 13093289.689034369
+     },
+     "mean_us": {
+      "median": 0.08657,
+      "min": 0.076375,
+      "max": 0.092905
+     },
+     "min_us": {
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+     },
+     "max_us": {
+      "median": 214.0,
+      "min": 29.7,
+      "max": 243.4
+     }
+    },
+    "control_dict_get": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.2,
+      "min": 0.2,
+      "max": 0.2
+     },
+     "p95_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.4
+     },
+     "p99_us": {
+      "median": 0.5,
+      "min": 0.5,
+      "max": 0.6
+     },
+     "throughput_ops_per_s": {
+      "median": 4385464.815415786,
+      "min": 4044047.7682922394,
+      "max": 4461338.044506309
+     },
+     "mean_us": {
+      "median": 0.228026,
+      "min": 0.224148,
+      "max": 0.247277
+     },
+     "min_us": {
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+     },
+     "max_us": {
+      "median": 246.9,
+      "min": 56.3,
+      "max": 281.2
+     }
+    },
+    "put_overwrite": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 4.5,
+      "min": 4.3,
+      "max": 7.7
+     },
+     "p95_us": {
+      "median": 5.6,
+      "min": 5.2,
+      "max": 8.9
+     },
+     "p99_us": {
+      "median": 27.9,
+      "min": 9.3,
+      "max": 30.6
+     },
+     "throughput_ops_per_s": {
+      "median": 186188.53451004488,
+      "min": 131337.0107696349,
+      "max": 211568.56937333388
+     },
+     "mean_us": {
+      "median": 5.3709,
+      "min": 4.7266,
+      "max": 7.614
+     },
+     "min_us": {
+      "median": 4.0,
+      "min": 3.9,
+      "max": 5.3
+     },
+     "max_us": {
+      "median": 91.2,
+      "min": 86.1,
+      "max": 289.6
+     }
+    },
+    "delete": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 4.4,
+      "min": 4.3,
+      "max": 5.4
+     },
+     "p95_us": {
+      "median": 5.0,
+      "min": 4.8,
+      "max": 6.3
+     },
+     "p99_us": {
+      "median": 9.4,
+      "min": 7.3,
+      "max": 15.6
+     },
+     "throughput_ops_per_s": {
+      "median": 212336.76611105213,
+      "min": 178804.5130259088,
+      "max": 220060.73676334668
+     },
+     "mean_us": {
+      "median": 4.7095,
+      "min": 4.5442,
+      "max": 5.5927
+     },
+     "min_us": {
+      "median": 4.0,
+      "min": 3.8,
+      "max": 4.6
+     },
+     "max_us": {
+      "median": 54.4,
+      "min": 45.1,
+      "max": 121.0
+     }
+    },
+    "put_load": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 4.4,
+      "min": 4.3,
+      "max": 4.7
+     },
+     "p95_us": {
+      "median": 5.7,
+      "min": 5.5,
+      "max": 6.5
+     },
+     "p99_us": {
+      "median": 13.8,
+      "min": 11.6,
+      "max": 16.5
+     },
+     "throughput_ops_per_s": {
+      "median": 195596.994300108,
+      "min": 189049.24676163367,
+      "max": 204797.96578276547
+     },
+     "mean_us": {
+      "median": 5.112553,
+      "min": 4.882861,
+      "max": 5.289627
+     },
+     "min_us": {
+      "median": 3.6,
+      "min": 3.6,
+      "max": 3.8
+     },
+     "max_us": {
+      "median": 1762.4,
+      "min": 1662.0,
+      "max": 7776.1
+     }
+    }
+   },
+   "pooled_all_runs": {
+    "get_hit": {
+     "ops": 500000,
+     "p50_us": 0.5,
+     "p95_us": 0.8,
+     "p99_us": 1.0,
+     "throughput_ops_per_s": 1720404.6529376083,
+     "mean_us": 0.5812586,
+     "min_us": 0.2,
+     "max_us": 434.5
+    },
+    "get_miss": {
+     "ops": 500000,
+     "p50_us": 0.4,
+     "p95_us": 0.6,
+     "p99_us": 0.7,
+     "throughput_ops_per_s": 2340791.0937580466,
+     "mean_us": 0.42720600000000003,
+     "min_us": 0.2,
+     "max_us": 320.9
+    },
+    "control_noop": {
+     "ops": 500000,
+     "p50_us": 0.1,
+     "p95_us": 0.1,
+     "p99_us": 0.1,
+     "throughput_ops_per_s": 11752289.93369358,
+     "mean_us": 0.0850898,
+     "min_us": 0.0,
+     "max_us": 243.4
+    },
+    "control_dict_get": {
+     "ops": 500000,
+     "p50_us": 0.2,
+     "p95_us": 0.4,
+     "p99_us": 0.5,
+     "throughput_ops_per_s": 4299947.110650539,
+     "mean_us": 0.23256100000000002,
+     "min_us": 0.0,
+     "max_us": 281.2
+    },
+    "put_overwrite": {
+     "ops": 5000,
+     "p50_us": 4.6,
+     "p95_us": 8.1,
+     "p99_us": 27.2,
+     "throughput_ops_per_s": 176590.46199596667,
+     "mean_us": 5.66282,
+     "min_us": 3.9,
+     "max_us": 289.6
+    },
+    "delete": {
+     "ops": 5000,
+     "p50_us": 4.5,
+     "p95_us": 5.9,
+     "p99_us": 9.4,
+     "throughput_ops_per_s": 205996.98420415123,
+     "mean_us": 4.854439999999999,
+     "min_us": 3.8,
+     "max_us": 121.0
+    }
+   },
+   "runs": [
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1677056.028764865,
+       "mean_us": 0.596283,
+       "min_us": 0.3,
+       "max_us": 434.5
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.8,
+       "throughput_ops_per_s": 2239591.4985106713,
+       "mean_us": 0.44651,
+       "min_us": 0.2,
+       "max_us": 140.3
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 12389577.887081387,
+       "mean_us": 0.080713,
+       "min_us": 0.0,
+       "max_us": 243.4
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.2,
+       "p95_us": 0.4,
+       "p99_us": 0.5,
+       "throughput_ops_per_s": 4226989.326851949,
+       "mean_us": 0.23657499999999998,
+       "min_us": 0.0,
+       "max_us": 246.9
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.3,
+       "p95_us": 5.2,
+       "p99_us": 9.3,
+       "throughput_ops_per_s": 211568.56937333388,
+       "mean_us": 4.7266,
+       "min_us": 3.9,
+       "max_us": 86.1
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.4,
+       "p95_us": 4.8,
+       "p99_us": 7.5,
+       "throughput_ops_per_s": 220060.73676334668,
+       "mean_us": 4.5442,
+       "min_us": 4.0,
+       "max_us": 53.7
+      },
+      "put_load": {
+       "ops": 100000,
+       "p50_us": 4.4,
+       "p95_us": 5.6,
+       "p99_us": 11.6,
+       "throughput_ops_per_s": 203862.7921863469,
+       "mean_us": 4.90526,
+       "min_us": 3.6,
+       "max_us": 2329.8
+      }
+     },
+     "open_recovery_ns": 102303100,
+     "open_recovery_final_ns": 113470900,
+     "load_wall_seconds": 0.5939743999999791,
+     "file_bytes_after_load": 12400000,
+     "file_bytes_final": 12548000,
+     "memtable_entries": 100000,
+     "tombstoned_keys_final": 996,
+     "records_replayed_at_open": 100000,
+     "records_replayed_at_final_reopen": 102000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.8,
+       "p99_us": 1.1,
+       "throughput_ops_per_s": 1723026.8757732082,
+       "mean_us": 0.5803740000000001,
+       "min_us": 0.3,
+       "max_us": 278.8
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2436647.1734892786,
+       "mean_us": 0.4104,
+       "min_us": 0.2,
+       "max_us": 256.3
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 13093289.689034369,
+       "mean_us": 0.076375,
+       "min_us": 0.0,
+       "max_us": 29.7
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.2,
+       "p95_us": 0.4,
+       "p99_us": 0.5,
+       "throughput_ops_per_s": 4385464.815415786,
+       "mean_us": 0.228026,
+       "min_us": 0.0,
+       "max_us": 258.6
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.4,
+       "p95_us": 5.3,
+       "p99_us": 27.9,
+       "throughput_ops_per_s": 204947.43098395262,
+       "mean_us": 4.8793,
+       "min_us": 4.0,
+       "max_us": 89.9
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.5,
+       "p95_us": 4.9,
+       "p99_us": 7.3,
+       "throughput_ops_per_s": 211046.1557942722,
+       "mean_us": 4.738300000000001,
+       "min_us": 4.0,
+       "max_us": 121.0
+      },
+      "put_load": {
+       "ops": 100000,
+       "p50_us": 4.7,
+       "p95_us": 6.5,
+       "p99_us": 14.0,
+       "throughput_ops_per_s": 189049.24676163367,
+       "mean_us": 5.289627,
+       "min_us": 3.8,
+       "max_us": 1662.0
+      }
+     },
+     "open_recovery_ns": 102683600,
+     "open_recovery_final_ns": 108484600,
+     "load_wall_seconds": 0.6415838000000349,
+     "file_bytes_after_load": 12400000,
+     "file_bytes_final": 12548000,
+     "memtable_entries": 100000,
+     "tombstoned_keys_final": 996,
+     "records_replayed_at_open": 100000,
+     "records_replayed_at_final_reopen": 102000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1748964.1759667837,
+       "mean_us": 0.571767,
+       "min_us": 0.2,
+       "max_us": 258.4
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2265754.9268840887,
+       "mean_us": 0.44135399999999997,
+       "min_us": 0.2,
+       "max_us": 151.7
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 11551345.731777752,
+       "mean_us": 0.08657,
+       "min_us": 0.0,
+       "max_us": 83.5
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.2,
+       "p95_us": 0.4,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 4044047.7682922394,
+       "mean_us": 0.247277,
+       "min_us": 0.0,
+       "max_us": 56.3
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 7.7,
+       "p95_us": 8.9,
+       "p99_us": 24.3,
+       "throughput_ops_per_s": 131337.0107696349,
+       "mean_us": 7.614,
+       "min_us": 5.3,
+       "max_us": 93.4
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.4,
+       "p95_us": 6.1,
+       "p99_us": 10.1,
+       "throughput_ops_per_s": 178804.5130259088,
+       "mean_us": 5.5927,
+       "min_us": 4.6,
+       "max_us": 45.1
+      },
+      "put_load": {
+       "ops": 100000,
+       "p50_us": 4.4,
+       "p95_us": 5.8,
+       "p99_us": 16.5,
+       "throughput_ops_per_s": 195596.994300108,
+       "mean_us": 5.112553,
+       "min_us": 3.6,
+       "max_us": 7776.1
+      }
+     },
+     "open_recovery_ns": 106791900,
+     "open_recovery_final_ns": 116703300,
+     "load_wall_seconds": 0.6179532999999537,
+     "file_bytes_after_load": 12400000,
+     "file_bytes_final": 12548000,
+     "memtable_entries": 100000,
+     "tombstoned_keys_final": 996,
+     "records_replayed_at_open": 100000,
+     "records_replayed_at_final_reopen": 102000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1701316.819218075,
+       "mean_us": 0.58778,
+       "min_us": 0.3,
+       "max_us": 243.2
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.8,
+       "throughput_ops_per_s": 2279633.526114342,
+       "mean_us": 0.438667,
+       "min_us": 0.2,
+       "max_us": 219.7
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 11250365.6368832,
+       "mean_us": 0.08888599999999999,
+       "min_us": 0.0,
+       "max_us": 236.8
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.2,
+       "p95_us": 0.4,
+       "p99_us": 0.5,
+       "throughput_ops_per_s": 4461338.044506309,
+       "mean_us": 0.224148,
+       "min_us": 0.0,
+       "max_us": 281.2
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.5,
+       "p95_us": 6.1,
+       "p99_us": 30.4,
+       "throughput_ops_per_s": 174724.3723026925,
+       "mean_us": 5.7233,
+       "min_us": 3.9,
+       "max_us": 289.6
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.4,
+       "p95_us": 5.0,
+       "p99_us": 15.6,
+       "throughput_ops_per_s": 212336.76611105213,
+       "mean_us": 4.7095,
+       "min_us": 4.0,
+       "max_us": 54.4
+      },
+      "put_load": {
+       "ops": 100000,
+       "p50_us": 4.7,
+       "p95_us": 5.7,
+       "p99_us": 12.5,
+       "throughput_ops_per_s": 194216.4666819709,
+       "mean_us": 5.148894,
+       "min_us": 3.7,
+       "max_us": 1762.4
+      }
+     },
+     "open_recovery_ns": 105079800,
+     "open_recovery_final_ns": 108003500,
+     "load_wall_seconds": 0.6248129999999037,
+     "file_bytes_after_load": 12400000,
+     "file_bytes_final": 12548000,
+     "memtable_entries": 100000,
+     "tombstoned_keys_final": 996,
+     "records_replayed_at_open": 100000,
+     "records_replayed_at_final_reopen": 102000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.7,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1754112.0772370629,
+       "mean_us": 0.5700890000000001,
+       "min_us": 0.3,
+       "max_us": 244.2
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2505643.963026718,
+       "mean_us": 0.399099,
+       "min_us": 0.2,
+       "max_us": 320.9
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 10763683.33243636,
+       "mean_us": 0.092905,
+       "min_us": 0.0,
+       "max_us": 214.0
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.2,
+       "p95_us": 0.4,
+       "p99_us": 0.5,
+       "throughput_ops_per_s": 4409579.370223874,
+       "mean_us": 0.226779,
+       "min_us": 0.0,
+       "max_us": 240.1
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.7,
+       "p95_us": 5.6,
+       "p99_us": 30.6,
+       "throughput_ops_per_s": 186188.53451004488,
+       "mean_us": 5.3709,
+       "min_us": 4.2,
+       "max_us": 91.2
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.3,
+       "p95_us": 6.3,
+       "p99_us": 9.4,
+       "throughput_ops_per_s": 213333.33333333334,
+       "mean_us": 4.6875,
+       "min_us": 3.8,
+       "max_us": 103.2
+      },
+      "put_load": {
+       "ops": 100000,
+       "p50_us": 4.3,
+       "p95_us": 5.5,
+       "p99_us": 13.8,
+       "throughput_ops_per_s": 204797.96578276547,
+       "mean_us": 4.882861,
+       "min_us": 3.6,
+       "max_us": 1700.1
+      }
+     },
+     "open_recovery_ns": 109928500,
+     "open_recovery_final_ns": 106940800,
+     "load_wall_seconds": 0.5921747999999525,
+     "file_bytes_after_load": 12400000,
+     "file_bytes_final": 12548000,
+     "memtable_entries": 100000,
+     "tombstoned_keys_final": 996,
+     "records_replayed_at_open": 100000,
+     "records_replayed_at_final_reopen": 102000
+    }
+   ],
+   "memory_probes": [
+    {
+     "load": {
+      "private_delta": 24752128,
+      "working_set_delta": 24547328,
+      "peak_working_set_after": 45121536,
+      "private_after": 37220352,
+      "private_before": 12468224
+     },
+     "open": {
+      "private_delta": 24768512,
+      "working_set_delta": 24514560,
+      "peak_working_set_after": 45228032,
+      "private_after": 37400576,
+      "private_before": 12632064
+     }
+    },
+    {
+     "load": {
+      "private_delta": 25169920,
+      "working_set_delta": 24571904,
+      "peak_working_set_after": 44953600,
+      "private_after": 37052416,
+      "private_before": 11882496
+     },
+     "open": {
+      "private_delta": 26456064,
+      "working_set_delta": 24576000,
+      "peak_working_set_after": 45072384,
+      "private_after": 38445056,
+      "private_before": 11988992
+     }
+    },
+    {
+     "load": {
+      "private_delta": 24645632,
+      "working_set_delta": 24563712,
+      "peak_working_set_after": 45137920,
+      "private_after": 37289984,
+      "private_before": 12644352
+     },
+     "open": {
+      "private_delta": 24686592,
+      "working_set_delta": 24510464,
+      "peak_working_set_after": 45060096,
+      "private_after": 37167104,
+      "private_before": 12480512
+     }
+    }
+   ],
+   "v0_delete": {
+    "runs_completed": 5,
+    "aggregate_over_runs": {
+     "delete": {
+      "ops": {
+       "median": 1000,
+       "min": 1000,
+       "max": 1000
+      },
+      "p50_us": {
+       "median": 3.8,
+       "min": 3.7,
+       "max": 4.4
+      },
+      "p95_us": {
+       "median": 4.4,
+       "min": 4.2,
+       "max": 5.4
+      },
+      "p99_us": {
+       "median": 8.5,
+       "min": 5.3,
+       "max": 11.8
+      },
+      "throughput_ops_per_s": {
+       "median": 225575.78218402475,
+       "min": 219245.35747955536,
+       "max": 255506.15769840052
+      },
+      "mean_us": {
+       "median": 4.4331000000000005,
+       "min": 3.9138,
+       "max": 4.561100000000001
+      },
+      "min_us": {
+       "median": 3.6,
+       "min": 3.4,
+       "max": 4.2
+      },
+      "max_us": {
+       "median": 108.2,
+       "min": 30.3,
+       "max": 208.1
+      }
+     }
+    },
+    "pooled_all_runs": {
+     "delete": {
+      "ops": 5000,
+      "p50_us": 3.9,
+      "p95_us": 4.6,
+      "p99_us": 7.2,
+      "throughput_ops_per_s": 232986.18391929357,
+      "mean_us": 4.2921000000000005,
+      "min_us": 3.4,
+      "max_us": 208.1
+     }
+    },
+    "runs": [
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.8,
+        "p95_us": 5.4,
+        "p99_us": 8.5,
+        "throughput_ops_per_s": 222632.8561569116,
+        "mean_us": 4.4917,
+        "min_us": 3.5,
+        "max_us": 208.1
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.7,
+        "p95_us": 4.2,
+        "p99_us": 9.7,
+        "throughput_ops_per_s": 246256.89519306543,
+        "mean_us": 4.0608,
+        "min_us": 3.4,
+        "max_us": 108.2
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.9,
+        "p95_us": 4.4,
+        "p99_us": 11.8,
+        "throughput_ops_per_s": 225575.78218402475,
+        "mean_us": 4.4331000000000005,
+        "min_us": 3.6,
+        "max_us": 137.2
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.8,
+        "p95_us": 4.2,
+        "p99_us": 5.3,
+        "throughput_ops_per_s": 255506.15769840052,
+        "mean_us": 3.9138,
+        "min_us": 3.6,
+        "max_us": 38.8
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.4,
+        "p95_us": 4.6,
+        "p99_us": 5.6,
+        "throughput_ops_per_s": 219245.35747955536,
+        "mean_us": 4.561100000000001,
+        "min_us": 4.2,
+        "max_us": 30.3
+       }
+      }
+     }
+    ]
+   }
+  },
+  "1000000": {
+   "records": 1000000,
+   "gets_per_kind": 100000,
+   "runs_planned": 5,
+   "runs_completed": 5,
+   "file_bytes_after_load": [
+    124000000,
+    124000000,
+    124000000,
+    124000000,
+    124000000
+   ],
+   "file_bytes_final": [
+    124148000,
+    124148000,
+    124148000,
+    124148000,
+    124148000
+   ],
+   "open_recovery_seconds": [
+    1.0609354,
+    1.1802333,
+    1.1438591,
+    1.0018817,
+    1.0101254
+   ],
+   "open_recovery_seconds_median": 1.0609354,
+   "open_recovery_final_seconds": [
+    1.0378797,
+    1.1076808,
+    1.0492354,
+    0.9964534,
+    1.0482572
+   ],
+   "load_wall_seconds": [
+    6.230350900000076,
+    6.306772500000079,
+    6.150382100000002,
+    6.116023599999949,
+    6.245889499999976
+   ],
+   "aggregate_over_runs": {
+    "get_hit": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.7,
+      "min": 0.6,
+      "max": 0.8
+     },
+     "p95_us": {
+      "median": 1.1,
+      "min": 1.1,
+      "max": 1.4
+     },
+     "p99_us": {
+      "median": 1.4,
+      "min": 1.4,
+      "max": 1.9
+     },
+     "throughput_ops_per_s": {
+      "median": 1358658.7320996711,
+      "min": 1091706.6322269614,
+      "max": 1368597.529681459
+     },
+     "mean_us": {
+      "median": 0.73602,
+      "min": 0.730675,
+      "max": 0.915997
+     },
+     "min_us": {
+      "median": 0.3,
+      "min": 0.3,
+      "max": 0.3
+     },
+     "max_us": {
+      "median": 202.5,
+      "min": 142.3,
+      "max": 1050.6
+     }
+    },
+    "get_miss": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.5
+     },
+     "p95_us": {
+      "median": 0.7,
+      "min": 0.7,
+      "max": 0.8
+     },
+     "p99_us": {
+      "median": 0.9,
+      "min": 0.8,
+      "max": 1.0
+     },
+     "throughput_ops_per_s": {
+      "median": 2025312.3537977645,
+      "min": 1711651.7267998445,
+      "max": 2145223.017384887
+     },
+     "mean_us": {
+      "median": 0.493751,
+      "min": 0.466152,
+      "max": 0.584231
+     },
+     "min_us": {
+      "median": 0.2,
+      "min": 0.2,
+      "max": 0.3
+     },
+     "max_us": {
+      "median": 300.3,
+      "min": 127.5,
+      "max": 719.3
+     }
+    },
+    "control_noop": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p95_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p99_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.2
+     },
+     "throughput_ops_per_s": {
+      "median": 12221950.623319482,
+      "min": 11007639.301675363,
+      "max": 12575294.57627545
+     },
+     "mean_us": {
+      "median": 0.08181999999999999,
+      "min": 0.079521,
+      "max": 0.09084600000000001
+     },
+     "min_us": {
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+     },
+     "max_us": {
+      "median": 109.4,
+      "min": 59.4,
+      "max": 132.6
+     }
+    },
+    "control_dict_get": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.4
+     },
+     "p95_us": {
+      "median": 0.7,
+      "min": 0.7,
+      "max": 0.8
+     },
+     "p99_us": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.1
+     },
+     "throughput_ops_per_s": {
+      "median": 2328619.431397707,
+      "min": 2236561.063708442,
+      "max": 2451268.7767188298
+     },
+     "mean_us": {
+      "median": 0.429439,
+      "min": 0.407952,
+      "max": 0.447115
+     },
+     "min_us": {
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+     },
+     "max_us": {
+      "median": 238.1,
+      "min": 83.1,
+      "max": 262.3
+     }
+    },
+    "put_overwrite": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 4.7,
+      "min": 4.4,
+      "max": 5.1
+     },
+     "p95_us": {
+      "median": 5.9,
+      "min": 5.3,
+      "max": 6.6
+     },
+     "p99_us": {
+      "median": 16.8,
+      "min": 9.6,
+      "max": 32.5
+     },
+     "throughput_ops_per_s": {
+      "median": 185157.75440675457,
+      "min": 180401.21229614664,
+      "max": 196193.83951343928
+     },
+     "mean_us": {
+      "median": 5.4008,
+      "min": 5.097,
+      "max": 5.5432
+     },
+     "min_us": {
+      "median": 4.1,
+      "min": 4.0,
+      "max": 4.6
+     },
+     "max_us": {
+      "median": 95.6,
+      "min": 86.3,
+      "max": 263.7
+     }
+    },
+    "delete": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 5.2,
+      "min": 4.2,
+      "max": 5.3
+     },
+     "p95_us": {
+      "median": 5.9,
+      "min": 4.8,
+      "max": 6.7
+     },
+     "p99_us": {
+      "median": 11.2,
+      "min": 6.0,
+      "max": 17.4
+     },
+     "throughput_ops_per_s": {
+      "median": 184969.38756635776,
+      "min": 163794.79787721942,
+      "max": 231283.39153965356
+     },
+     "mean_us": {
+      "median": 5.4063,
+      "min": 4.3237,
+      "max": 6.1052
+     },
+     "min_us": {
+      "median": 4.5,
+      "min": 3.8,
+      "max": 4.7
+     },
+     "max_us": {
+      "median": 64.1,
+      "min": 16.1,
+      "max": 289.2
+     }
+    },
+    "put_load": {
+     "ops": {
+      "median": 1000000,
+      "min": 1000000,
+      "max": 1000000
+     },
+     "p50_us": {
+      "median": 4.6,
+      "min": 4.6,
+      "max": 4.7
+     },
+     "p95_us": {
+      "median": 6.0,
+      "min": 5.9,
+      "max": 6.1
+     },
+     "p99_us": {
+      "median": 12.7,
+      "min": 12.2,
+      "max": 16.4
+     },
+     "throughput_ops_per_s": {
+      "median": 192293.51435896053,
+      "min": 190078.70151612666,
+      "max": 196120.15882045808
+     },
+     "mean_us": {
+      "median": 5.2003834,
+      "min": 5.0989149,
+      "max": 5.2609787
+     },
+     "min_us": {
+      "median": 3.6,
+      "min": 3.6,
+      "max": 3.6
+     },
+     "max_us": {
+      "median": 15477.7,
+      "min": 15053.3,
+      "max": 15895.6
+     }
+    }
+   },
+   "pooled_all_runs": {
+    "get_hit": {
+     "ops": 500000,
+     "p50_us": 0.7,
+     "p95_us": 1.2,
+     "p99_us": 1.6,
+     "throughput_ops_per_s": 1287928.1974878188,
+     "mean_us": 0.7764407999999999,
+     "min_us": 0.3,
+     "max_us": 1050.6
+    },
+    "get_miss": {
+     "ops": 500000,
+     "p50_us": 0.5,
+     "p95_us": 0.7,
+     "p99_us": 0.9,
+     "throughput_ops_per_s": 1976930.0174681535,
+     "mean_us": 0.5058347999999999,
+     "min_us": 0.2,
+     "max_us": 719.3
+    },
+    "control_noop": {
+     "ops": 500000,
+     "p50_us": 0.1,
+     "p95_us": 0.1,
+     "p99_us": 0.1,
+     "throughput_ops_per_s": 12016775.418484204,
+     "mean_us": 0.083217,
+     "min_us": 0.0,
+     "max_us": 132.6
+    },
+    "control_dict_get": {
+     "ops": 500000,
+     "p50_us": 0.4,
+     "p95_us": 0.7,
+     "p99_us": 1.0,
+     "throughput_ops_per_s": 2326360.4555944316,
+     "mean_us": 0.429856,
+     "min_us": 0.0,
+     "max_us": 262.3
+    },
+    "put_overwrite": {
+     "ops": 5000,
+     "p50_us": 4.7,
+     "p95_us": 6.2,
+     "p99_us": 12.2,
+     "throughput_ops_per_s": 187866.8099464204,
+     "mean_us": 5.32292,
+     "min_us": 4.0,
+     "max_us": 263.7
+    },
+    "delete": {
+     "ops": 5000,
+     "p50_us": 5.0,
+     "p95_us": 6.1,
+     "p99_us": 10.9,
+     "throughput_ops_per_s": 187418.94130788435,
+     "mean_us": 5.335640000000001,
+     "min_us": 3.8,
+     "max_us": 289.2
+    }
+   },
+   "runs": [
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.7,
+       "p95_us": 1.1,
+       "p99_us": 1.4,
+       "throughput_ops_per_s": 1307119.4877137302,
+       "mean_us": 0.7650410000000001,
+       "min_us": 0.3,
+       "max_us": 1050.6
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 2025312.3537977645,
+       "mean_us": 0.493751,
+       "min_us": 0.2,
+       "max_us": 351.4
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 12565339.766787296,
+       "mean_us": 0.079584,
+       "min_us": 0.0,
+       "max_us": 122.0
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 2328619.431397707,
+       "mean_us": 0.429439,
+       "min_us": 0.0,
+       "max_us": 262.3
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.4,
+       "p95_us": 5.3,
+       "p99_us": 32.5,
+       "throughput_ops_per_s": 196193.83951343928,
+       "mean_us": 5.097,
+       "min_us": 4.0,
+       "max_us": 102.0
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.4,
+       "p95_us": 5.4,
+       "p99_us": 16.3,
+       "throughput_ops_per_s": 192159.8770176787,
+       "mean_us": 5.204,
+       "min_us": 3.9,
+       "max_us": 289.2
+      },
+      "put_load": {
+       "ops": 1000000,
+       "p50_us": 4.6,
+       "p95_us": 6.0,
+       "p99_us": 16.4,
+       "throughput_ops_per_s": 192293.51435896053,
+       "mean_us": 5.2003834,
+       "min_us": 3.6,
+       "max_us": 15895.6
+      }
+     },
+     "open_recovery_ns": 1060935400,
+     "open_recovery_final_ns": 1037879700,
+     "load_wall_seconds": 6.230350900000076,
+     "file_bytes_after_load": 124000000,
+     "file_bytes_final": 124148000,
+     "memtable_entries": 1000000,
+     "tombstoned_keys_final": 998,
+     "records_replayed_at_open": 1000000,
+     "records_replayed_at_final_reopen": 1002000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.7,
+       "p95_us": 1.1,
+       "p99_us": 1.4,
+       "throughput_ops_per_s": 1361524.144588418,
+       "mean_us": 0.734471,
+       "min_us": 0.3,
+       "max_us": 142.3
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 2013733.663585654,
+       "mean_us": 0.49659,
+       "min_us": 0.2,
+       "max_us": 719.3
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 12221950.623319482,
+       "mean_us": 0.08181999999999999,
+       "min_us": 0.0,
+       "max_us": 132.6
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 2364015.895642882,
+       "mean_us": 0.423009,
+       "min_us": 0.0,
+       "max_us": 83.1
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.7,
+       "p95_us": 6.1,
+       "p99_us": 9.6,
+       "throughput_ops_per_s": 194031.58834258217,
+       "mean_us": 5.1538,
+       "min_us": 4.1,
+       "max_us": 95.6
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.3,
+       "p95_us": 6.7,
+       "p99_us": 17.4,
+       "throughput_ops_per_s": 163794.79787721942,
+       "mean_us": 6.1052,
+       "min_us": 4.6,
+       "max_us": 186.1
+      },
+      "put_load": {
+       "ops": 1000000,
+       "p50_us": 4.7,
+       "p95_us": 6.0,
+       "p99_us": 13.7,
+       "throughput_ops_per_s": 190078.70151612666,
+       "mean_us": 5.2609787,
+       "min_us": 3.6,
+       "max_us": 15519.6
+      }
+     },
+     "open_recovery_ns": 1180233300,
+     "open_recovery_final_ns": 1107680800,
+     "load_wall_seconds": 6.306772500000079,
+     "file_bytes_after_load": 124000000,
+     "file_bytes_final": 124148000,
+     "memtable_entries": 1000000,
+     "tombstoned_keys_final": 998,
+     "records_replayed_at_open": 1000000,
+     "records_replayed_at_final_reopen": 1002000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.8,
+       "p95_us": 1.4,
+       "p99_us": 1.9,
+       "throughput_ops_per_s": 1091706.6322269614,
+       "mean_us": 0.915997,
+       "min_us": 0.3,
+       "max_us": 202.5
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1711651.7267998445,
+       "mean_us": 0.584231,
+       "min_us": 0.3,
+       "max_us": 300.3
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 11007639.301675363,
+       "mean_us": 0.09084600000000001,
+       "min_us": 0.0,
+       "max_us": 59.4
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.8,
+       "p99_us": 1.1,
+       "throughput_ops_per_s": 2236561.063708442,
+       "mean_us": 0.447115,
+       "min_us": 0.0,
+       "max_us": 238.1
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.8,
+       "p95_us": 6.6,
+       "p99_us": 16.8,
+       "throughput_ops_per_s": 185157.75440675457,
+       "mean_us": 5.4008,
+       "min_us": 4.1,
+       "max_us": 86.3
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.2,
+       "p95_us": 6.1,
+       "p99_us": 9.0,
+       "throughput_ops_per_s": 184969.38756635776,
+       "mean_us": 5.4063,
+       "min_us": 4.5,
+       "max_us": 63.8
+      },
+      "put_load": {
+       "ops": 1000000,
+       "p50_us": 4.6,
+       "p95_us": 6.1,
+       "p99_us": 12.2,
+       "throughput_ops_per_s": 194812.90383010352,
+       "mean_us": 5.133130199999999,
+       "min_us": 3.6,
+       "max_us": 15477.7
+      }
+     },
+     "open_recovery_ns": 1143859100,
+     "open_recovery_final_ns": 1049235400,
+     "load_wall_seconds": 6.150382100000002,
+     "file_bytes_after_load": 124000000,
+     "file_bytes_final": 124148000,
+     "memtable_entries": 1000000,
+     "tombstoned_keys_final": 998,
+     "records_replayed_at_open": 1000000,
+     "records_replayed_at_final_reopen": 1002000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.7,
+       "p95_us": 1.1,
+       "p99_us": 1.4,
+       "throughput_ops_per_s": 1358658.7320996711,
+       "mean_us": 0.73602,
+       "min_us": 0.3,
+       "max_us": 144.5
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 2047292.4557273006,
+       "mean_us": 0.48845,
+       "min_us": 0.2,
+       "max_us": 127.5
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 11860426.500936974,
+       "mean_us": 0.08431399999999999,
+       "min_us": 0.0,
+       "max_us": 109.4
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.8,
+       "p99_us": 1.1,
+       "throughput_ops_per_s": 2263646.9616198656,
+       "mean_us": 0.44176499999999996,
+       "min_us": 0.0,
+       "max_us": 178.9
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 5.1,
+       "p95_us": 5.9,
+       "p99_us": 9.7,
+       "throughput_ops_per_s": 180401.21229614664,
+       "mean_us": 5.5432,
+       "min_us": 4.6,
+       "max_us": 94.0
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.2,
+       "p95_us": 5.9,
+       "p99_us": 11.2,
+       "throughput_ops_per_s": 177336.40716439084,
+       "mean_us": 5.639,
+       "min_us": 4.7,
+       "max_us": 64.1
+      },
+      "put_load": {
+       "ops": 1000000,
+       "p50_us": 4.6,
+       "p95_us": 5.9,
+       "p99_us": 12.2,
+       "throughput_ops_per_s": 196120.15882045808,
+       "mean_us": 5.0989149,
+       "min_us": 3.6,
+       "max_us": 15432.4
+      }
+     },
+     "open_recovery_ns": 1001881700,
+     "open_recovery_final_ns": 996453400,
+     "load_wall_seconds": 6.116023599999949,
+     "file_bytes_after_load": 124000000,
+     "file_bytes_final": 124148000,
+     "memtable_entries": 1000000,
+     "tombstoned_keys_final": 998,
+     "records_replayed_at_open": 1000000,
+     "records_replayed_at_final_reopen": 1002000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.6,
+       "p95_us": 1.1,
+       "p99_us": 1.5,
+       "throughput_ops_per_s": 1368597.529681459,
+       "mean_us": 0.730675,
+       "min_us": 0.3,
+       "max_us": 236.3
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 0.8,
+       "throughput_ops_per_s": 2145223.017384887,
+       "mean_us": 0.466152,
+       "min_us": 0.2,
+       "max_us": 247.8
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 12575294.57627545,
+       "mean_us": 0.079521,
+       "min_us": 0.0,
+       "max_us": 76.2
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.7,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 2451268.7767188298,
+       "mean_us": 0.407952,
+       "min_us": 0.0,
+       "max_us": 260.7
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.6,
+       "p95_us": 5.5,
+       "p99_us": 17.5,
+       "throughput_ops_per_s": 184508.6534558471,
+       "mean_us": 5.4198,
+       "min_us": 4.2,
+       "max_us": 263.7
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.2,
+       "p95_us": 4.8,
+       "p99_us": 6.0,
+       "throughput_ops_per_s": 231283.39153965356,
+       "mean_us": 4.3237,
+       "min_us": 3.8,
+       "max_us": 16.1
+      },
+      "put_load": {
+       "ops": 1000000,
+       "p50_us": 4.7,
+       "p95_us": 6.1,
+       "p99_us": 12.7,
+       "throughput_ops_per_s": 191703.9097839867,
+       "mean_us": 5.2163777,
+       "min_us": 3.6,
+       "max_us": 15053.3
+      }
+     },
+     "open_recovery_ns": 1010125400,
+     "open_recovery_final_ns": 1048257200,
+     "load_wall_seconds": 6.245889499999976,
+     "file_bytes_after_load": 124000000,
+     "file_bytes_final": 124148000,
+     "memtable_entries": 1000000,
+     "tombstoned_keys_final": 998,
+     "records_replayed_at_open": 1000000,
+     "records_replayed_at_final_reopen": 1002000
+    }
+   ],
+   "memory_probes": [
+    {
+     "load": {
+      "private_delta": 236322816,
+      "working_set_delta": 235098112,
+      "peak_working_set_after": 255234048,
+      "private_after": 248750080,
+      "private_before": 12427264
+     },
+     "open": {
+      "private_delta": 236040192,
+      "working_set_delta": 235053056,
+      "peak_working_set_after": 255561728,
+      "private_after": 248590336,
+      "private_before": 12550144
+     }
+    },
+    {
+     "load": {
+      "private_delta": 236400640,
+      "working_set_delta": 235114496,
+      "peak_working_set_after": 255291392,
+      "private_after": 248258560,
+      "private_before": 11857920
+     },
+     "open": {
+      "private_delta": 235880448,
+      "working_set_delta": 235098112,
+      "peak_working_set_after": 255586304,
+      "private_after": 248532992,
+      "private_before": 12652544
+     }
+    },
+    {
+     "load": {
+      "private_delta": 235954176,
+      "working_set_delta": 235061248,
+      "peak_working_set_after": 255508480,
+      "private_after": 248512512,
+      "private_before": 12558336
+     },
+     "open": {
+      "private_delta": 236994560,
+      "working_set_delta": 235110400,
+      "peak_working_set_after": 255238144,
+      "private_after": 249380864,
+      "private_before": 12386304
+     }
+    }
+   ],
+   "v0_delete": {
+    "runs_completed": 5,
+    "aggregate_over_runs": {
+     "delete": {
+      "ops": {
+       "median": 1000,
+       "min": 1000,
+       "max": 1000
+      },
+      "p50_us": {
+       "median": 4.1,
+       "min": 3.8,
+       "max": 4.7
+      },
+      "p95_us": {
+       "median": 4.9,
+       "min": 3.9,
+       "max": 5.3
+      },
+      "p99_us": {
+       "median": 6.3,
+       "min": 4.3,
+       "max": 37.3
+      },
+      "throughput_ops_per_s": {
+       "median": 230144.3004763987,
+       "min": 182695.1183864367,
+       "max": 262391.43554354383
+      },
+      "mean_us": {
+       "median": 4.3451,
+       "min": 3.8110999999999997,
+       "max": 5.4736
+      },
+      "min_us": {
+       "median": 3.9,
+       "min": 3.5,
+       "max": 4.5
+      },
+      "max_us": {
+       "median": 39.8,
+       "min": 7.0,
+       "max": 157.3
+      }
+     }
+    },
+    "pooled_all_runs": {
+     "delete": {
+      "ops": 5000,
+      "p50_us": 4.1,
+      "p95_us": 4.9,
+      "p99_us": 7.0,
+      "throughput_ops_per_s": 220188.65764186755,
+      "mean_us": 4.5415600000000005,
+      "min_us": 3.5,
+      "max_us": 157.3
+     }
+    },
+    "runs": [
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.7,
+        "p95_us": 5.0,
+        "p99_us": 37.3,
+        "throughput_ops_per_s": 182695.1183864367,
+        "mean_us": 5.4736,
+        "min_us": 4.5,
+        "max_us": 157.3
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.7,
+        "p95_us": 4.9,
+        "p99_us": 6.0,
+        "throughput_ops_per_s": 206453.74403864812,
+        "mean_us": 4.8437,
+        "min_us": 4.5,
+        "max_us": 39.3
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.0,
+        "p95_us": 4.3,
+        "p99_us": 6.3,
+        "throughput_ops_per_s": 236166.54464728528,
+        "mean_us": 4.2343,
+        "min_us": 3.5,
+        "max_us": 125.5
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.1,
+        "p95_us": 5.3,
+        "p99_us": 7.4,
+        "throughput_ops_per_s": 230144.3004763987,
+        "mean_us": 4.3451,
+        "min_us": 3.9,
+        "max_us": 39.8
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.8,
+        "p95_us": 3.9,
+        "p99_us": 4.3,
+        "throughput_ops_per_s": 262391.43554354383,
+        "mean_us": 3.8110999999999997,
+        "min_us": 3.6,
+        "max_us": 7.0
+       }
+      }
+     }
+    ]
+   }
+  },
+  "5000000": {
+   "records": 5000000,
+   "gets_per_kind": 100000,
+   "runs_planned": 3,
+   "runs_completed": 3,
+   "file_bytes_after_load": [
+    620000000,
+    620000000,
+    620000000
+   ],
+   "file_bytes_final": [
+    620148000,
+    620148000,
+    620148000
+   ],
+   "open_recovery_seconds": [
+    5.3530633,
+    5.2228638,
+    5.3675255
+   ],
+   "open_recovery_seconds_median": 5.3530633,
+   "open_recovery_final_seconds": [
+    5.3481407,
+    5.2995005,
+    5.3376448
+   ],
+   "load_wall_seconds": [
+    30.451375600000006,
+    30.776178200000004,
+    30.621934500000066
+   ],
+   "aggregate_over_runs": {
+    "get_hit": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.7,
+      "min": 0.7,
+      "max": 0.7
+     },
+     "p95_us": {
+      "median": 1.2,
+      "min": 1.2,
+      "max": 1.2
+     },
+     "p99_us": {
+      "median": 1.6,
+      "min": 1.5,
+      "max": 1.6
+     },
+     "throughput_ops_per_s": {
+      "median": 1220068.6654644923,
+      "min": 1191226.379469928,
+      "max": 1220469.221596935
+     },
+     "mean_us": {
+      "median": 0.819626,
+      "min": 0.819357,
+      "max": 0.839471
+     },
+     "min_us": {
+      "median": 0.3,
+      "min": 0.3,
+      "max": 0.4
+     },
+     "max_us": {
+      "median": 231.3,
+      "min": 229.4,
+      "max": 253.0
+     }
+    },
+    "get_miss": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.5,
+      "min": 0.5,
+      "max": 0.6
+     },
+     "p95_us": {
+      "median": 0.8,
+      "min": 0.7,
+      "max": 0.8
+     },
+     "p99_us": {
+      "median": 1.0,
+      "min": 0.9,
+      "max": 1.0
+     },
+     "throughput_ops_per_s": {
+      "median": 1803546.855245526,
+      "min": 1693462.8945345178,
+      "max": 1903786.4408522109
+     },
+     "mean_us": {
+      "median": 0.5544629999999999,
+      "min": 0.525269,
+      "max": 0.590506
+     },
+     "min_us": {
+      "median": 0.2,
+      "min": 0.2,
+      "max": 0.3
+     },
+     "max_us": {
+      "median": 199.9,
+      "min": 156.5,
+      "max": 243.8
+     }
+    },
+    "control_noop": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p95_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p99_us": {
+      "median": 0.2,
+      "min": 0.1,
+      "max": 0.2
+     },
+     "throughput_ops_per_s": {
+      "median": 12204498.578175915,
+      "min": 11021712.774165105,
+      "max": 12778409.599141292
+     },
+     "mean_us": {
+      "median": 0.081937,
+      "min": 0.07825700000000001,
+      "max": 0.09073
+     },
+     "min_us": {
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+     },
+     "max_us": {
+      "median": 165.7,
+      "min": 130.6,
+      "max": 254.9
+     }
+    },
+    "control_dict_get": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.4
+     },
+     "p95_us": {
+      "median": 0.9,
+      "min": 0.8,
+      "max": 0.9
+     },
+     "p99_us": {
+      "median": 1.1,
+      "min": 1.1,
+      "max": 1.2
+     },
+     "throughput_ops_per_s": {
+      "median": 1986969.4543185786,
+      "min": 1897497.2011916284,
+      "max": 2012121.0170064468
+     },
+     "mean_us": {
+      "median": 0.503279,
+      "min": 0.496988,
+      "max": 0.52701
+     },
+     "min_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "max_us": {
+      "median": 172.9,
+      "min": 167.2,
+      "max": 215.7
+     }
+    },
+    "put_overwrite": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 4.5,
+      "min": 4.4,
+      "max": 5.2
+     },
+     "p95_us": {
+      "median": 5.6,
+      "min": 5.2,
+      "max": 12.5
+     },
+     "p99_us": {
+      "median": 17.8,
+      "min": 11.4,
+      "max": 26.3
+     },
+     "throughput_ops_per_s": {
+      "median": 183945.25789125156,
+      "min": 152257.98593136208,
+      "max": 202716.3997567403
+     },
+     "mean_us": {
+      "median": 5.4364,
+      "min": 4.933,
+      "max": 6.5678
+     },
+     "min_us": {
+      "median": 4.0,
+      "min": 3.9,
+      "max": 4.8
+     },
+     "max_us": {
+      "median": 220.7,
+      "min": 95.8,
+      "max": 342.9
+     }
+    },
+    "delete": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 5.0,
+      "min": 4.2,
+      "max": 5.0
+     },
+     "p95_us": {
+      "median": 5.5,
+      "min": 4.7,
+      "max": 6.1
+     },
+     "p99_us": {
+      "median": 7.6,
+      "min": 5.6,
+      "max": 9.6
+     },
+     "throughput_ops_per_s": {
+      "median": 194905.1786305962,
+      "min": 192004.91532583235,
+      "max": 233388.56862790862
+     },
+     "mean_us": {
+      "median": 5.1307,
+      "min": 4.2847,
+      "max": 5.2082
+     },
+     "min_us": {
+      "median": 4.3,
+      "min": 3.8,
+      "max": 4.5
+     },
+     "max_us": {
+      "median": 32.0,
+      "min": 16.7,
+      "max": 76.1
+     }
+    },
+    "put_load": {
+     "ops": {
+      "median": 5000000,
+      "min": 5000000,
+      "max": 5000000
+     },
+     "p50_us": {
+      "median": 4.5,
+      "min": 4.5,
+      "max": 4.5
+     },
+     "p95_us": {
+      "median": 5.9,
+      "min": 5.8,
+      "max": 6.3
+     },
+     "p99_us": {
+      "median": 14.1,
+      "min": 13.3,
+      "max": 15.3
+     },
+     "throughput_ops_per_s": {
+      "median": 194561.08381419105,
+      "min": 193577.05373532922,
+      "max": 196915.8674514557
+     },
+     "mean_us": {
+      "median": 5.139774,
+      "min": 5.07831092,
+      "max": 5.16590154
+     },
+     "min_us": {
+      "median": 3.6,
+      "min": 3.6,
+      "max": 3.6
+     },
+     "max_us": {
+      "median": 76558.7,
+      "min": 75643.0,
+      "max": 84178.3
+     }
+    }
+   },
+   "pooled_all_runs": {
+    "get_hit": {
+     "ops": 300000,
+     "p50_us": 0.7,
+     "p95_us": 1.2,
+     "p99_us": 1.6,
+     "throughput_ops_per_s": 1210431.9870370803,
+     "mean_us": 0.8261513333333333,
+     "min_us": 0.3,
+     "max_us": 253.0
+    },
+    "get_miss": {
+     "ops": 300000,
+     "p50_us": 0.5,
+     "p95_us": 0.8,
+     "p99_us": 1.0,
+     "throughput_ops_per_s": 1796151.2071932263,
+     "mean_us": 0.556746,
+     "min_us": 0.2,
+     "max_us": 243.8
+    },
+    "control_noop": {
+     "ops": 300000,
+     "p50_us": 0.1,
+     "p95_us": 0.1,
+     "p99_us": 0.2,
+     "throughput_ops_per_s": 11955811.321356267,
+     "mean_us": 0.08364133333333333,
+     "min_us": 0.0,
+     "max_us": 254.9
+    },
+    "control_dict_get": {
+     "ops": 300000,
+     "p50_us": 0.4,
+     "p95_us": 0.9,
+     "p99_us": 1.2,
+     "throughput_ops_per_s": 1964280.218977959,
+     "mean_us": 0.5090923333333334,
+     "min_us": 0.1,
+     "max_us": 215.7
+    },
+    "put_overwrite": {
+     "ops": 3000,
+     "p50_us": 4.7,
+     "p95_us": 6.5,
+     "p99_us": 24.1,
+     "throughput_ops_per_s": 177124.90848546397,
+     "mean_us": 5.645733333333333,
+     "min_us": 3.9,
+     "max_us": 342.9
+    },
+    "delete": {
+     "ops": 3000,
+     "p50_us": 4.8,
+     "p95_us": 5.7,
+     "p99_us": 7.6,
+     "throughput_ops_per_s": 205147.8432123417,
+     "mean_us": 4.874533333333334,
+     "min_us": 3.8,
+     "max_us": 76.1
+    }
+   },
+   "runs": [
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.7,
+       "p95_us": 1.2,
+       "p99_us": 1.5,
+       "throughput_ops_per_s": 1220068.6654644923,
+       "mean_us": 0.819626,
+       "min_us": 0.3,
+       "max_us": 229.4
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.7,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 1903786.4408522109,
+       "mean_us": 0.525269,
+       "min_us": 0.2,
+       "max_us": 243.8
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 12778409.599141292,
+       "mean_us": 0.07825700000000001,
+       "min_us": 0.0,
+       "max_us": 130.6
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.8,
+       "p99_us": 1.1,
+       "throughput_ops_per_s": 1986969.4543185786,
+       "mean_us": 0.503279,
+       "min_us": 0.1,
+       "max_us": 215.7
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.5,
+       "p95_us": 5.6,
+       "p99_us": 17.8,
+       "throughput_ops_per_s": 183945.25789125156,
+       "mean_us": 5.4364,
+       "min_us": 3.9,
+       "max_us": 342.9
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.2,
+       "p95_us": 4.7,
+       "p99_us": 5.6,
+       "throughput_ops_per_s": 233388.56862790862,
+       "mean_us": 4.2847,
+       "min_us": 3.8,
+       "max_us": 16.7
+      },
+      "put_load": {
+       "ops": 5000000,
+       "p50_us": 4.5,
+       "p95_us": 5.8,
+       "p99_us": 13.3,
+       "throughput_ops_per_s": 196915.8674514557,
+       "mean_us": 5.07831092,
+       "min_us": 3.6,
+       "max_us": 84178.3
+      }
+     },
+     "open_recovery_ns": 5353063300,
+     "open_recovery_final_ns": 5348140700,
+     "load_wall_seconds": 30.451375600000006,
+     "file_bytes_after_load": 620000000,
+     "file_bytes_final": 620148000,
+     "memtable_entries": 5000000,
+     "tombstoned_keys_final": 1000,
+     "records_replayed_at_open": 5000000,
+     "records_replayed_at_final_reopen": 5002000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.7,
+       "p95_us": 1.2,
+       "p99_us": 1.6,
+       "throughput_ops_per_s": 1191226.379469928,
+       "mean_us": 0.839471,
+       "min_us": 0.3,
+       "max_us": 253.0
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.6,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1693462.8945345178,
+       "mean_us": 0.590506,
+       "min_us": 0.3,
+       "max_us": 156.5
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 11021712.774165105,
+       "mean_us": 0.09073,
+       "min_us": 0.0,
+       "max_us": 254.9
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.9,
+       "p99_us": 1.1,
+       "throughput_ops_per_s": 2012121.0170064468,
+       "mean_us": 0.496988,
+       "min_us": 0.1,
+       "max_us": 167.2
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.4,
+       "p95_us": 5.2,
+       "p99_us": 11.4,
+       "throughput_ops_per_s": 202716.3997567403,
+       "mean_us": 4.933,
+       "min_us": 4.0,
+       "max_us": 95.8
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.0,
+       "p95_us": 6.1,
+       "p99_us": 9.6,
+       "throughput_ops_per_s": 192004.91532583235,
+       "mean_us": 5.2082,
+       "min_us": 4.3,
+       "max_us": 32.0
+      },
+      "put_load": {
+       "ops": 5000000,
+       "p50_us": 4.5,
+       "p95_us": 6.3,
+       "p99_us": 15.3,
+       "throughput_ops_per_s": 193577.05373532922,
+       "mean_us": 5.16590154,
+       "min_us": 3.6,
+       "max_us": 75643.0
+      }
+     },
+     "open_recovery_ns": 5222863800,
+     "open_recovery_final_ns": 5299500500,
+     "load_wall_seconds": 30.776178200000004,
+     "file_bytes_after_load": 620000000,
+     "file_bytes_final": 620148000,
+     "memtable_entries": 5000000,
+     "tombstoned_keys_final": 1000,
+     "records_replayed_at_open": 5000000,
+     "records_replayed_at_final_reopen": 5002000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.7,
+       "p95_us": 1.2,
+       "p99_us": 1.6,
+       "throughput_ops_per_s": 1220469.221596935,
+       "mean_us": 0.819357,
+       "min_us": 0.4,
+       "max_us": 231.3
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1803546.855245526,
+       "mean_us": 0.5544629999999999,
+       "min_us": 0.2,
+       "max_us": 199.9
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 12204498.578175915,
+       "mean_us": 0.081937,
+       "min_us": 0.0,
+       "max_us": 165.7
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.9,
+       "p99_us": 1.2,
+       "throughput_ops_per_s": 1897497.2011916284,
+       "mean_us": 0.52701,
+       "min_us": 0.1,
+       "max_us": 172.9
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 5.2,
+       "p95_us": 12.5,
+       "p99_us": 26.3,
+       "throughput_ops_per_s": 152257.98593136208,
+       "mean_us": 6.5678,
+       "min_us": 4.8,
+       "max_us": 220.7
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.0,
+       "p95_us": 5.5,
+       "p99_us": 7.6,
+       "throughput_ops_per_s": 194905.1786305962,
+       "mean_us": 5.1307,
+       "min_us": 4.5,
+       "max_us": 76.1
+      },
+      "put_load": {
+       "ops": 5000000,
+       "p50_us": 4.5,
+       "p95_us": 5.9,
+       "p99_us": 14.1,
+       "throughput_ops_per_s": 194561.08381419105,
+       "mean_us": 5.139774,
+       "min_us": 3.6,
+       "max_us": 76558.7
+      }
+     },
+     "open_recovery_ns": 5367525500,
+     "open_recovery_final_ns": 5337644800,
+     "load_wall_seconds": 30.621934500000066,
+     "file_bytes_after_load": 620000000,
+     "file_bytes_final": 620148000,
+     "memtable_entries": 5000000,
+     "tombstoned_keys_final": 1000,
+     "records_replayed_at_open": 5000000,
+     "records_replayed_at_final_reopen": 5002000
+    }
+   ],
+   "memory_probes": [
+    {
+     "load": {
+      "private_delta": 1135730688,
+      "working_set_delta": 1133690880,
+      "peak_working_set_after": 1154064384,
+      "private_after": 1148370944,
+      "private_before": 12640256
+     },
+     "open": {
+      "private_delta": 1135747072,
+      "working_set_delta": 1133678592,
+      "peak_working_set_after": 1154134016,
+      "private_after": 1148313600,
+      "private_before": 12566528
+     }
+    },
+    {
+     "load": {
+      "private_delta": 1135742976,
+      "working_set_delta": 1133658112,
+      "peak_working_set_after": 1154158592,
+      "private_after": 1148375040,
+      "private_before": 12632064
+     },
+     "open": {
+      "private_delta": 1135194112,
+      "working_set_delta": 1133694976,
+      "peak_working_set_after": 1153949696,
+      "private_after": 1147633664,
+      "private_before": 12439552
+     }
+    },
+    {
+     "load": {
+      "private_delta": 1135742976,
+      "working_set_delta": 1133694976,
+      "peak_working_set_after": 1154088960,
+      "private_after": 1148301312,
+      "private_before": 12558336
+     },
+     "open": {
+      "private_delta": 1135734784,
+      "working_set_delta": 1133760512,
+      "peak_working_set_after": 1153978368,
+      "private_after": 1148178432,
+      "private_before": 12443648
+     }
+    }
+   ],
+   "v0_delete": {
+    "runs_completed": 3,
+    "aggregate_over_runs": {
+     "delete": {
+      "ops": {
+       "median": 1000,
+       "min": 1000,
+       "max": 1000
+      },
+      "p50_us": {
+       "median": 4.1,
+       "min": 3.9,
+       "max": 4.3
+      },
+      "p95_us": {
+       "median": 4.4,
+       "min": 4.4,
+       "max": 4.5
+      },
+      "p99_us": {
+       "median": 5.5,
+       "min": 5.0,
+       "max": 6.1
+      },
+      "throughput_ops_per_s": {
+       "median": 243878.6459857575,
+       "min": 229937.91676247417,
+       "max": 244271.82568762518
+      },
+      "mean_us": {
+       "median": 4.1004,
+       "min": 4.0938,
+       "max": 4.349
+      },
+      "min_us": {
+       "median": 3.7,
+       "min": 3.5,
+       "max": 4.1
+      },
+      "max_us": {
+       "median": 11.2,
+       "min": 7.3,
+       "max": 71.1
+      }
+     }
+    },
+    "pooled_all_runs": {
+     "delete": {
+      "ops": 3000,
+      "p50_us": 4.2,
+      "p95_us": 4.5,
+      "p99_us": 5.6,
+      "throughput_ops_per_s": 239173.41667198166,
+      "mean_us": 4.181066666666666,
+      "min_us": 3.5,
+      "max_us": 71.1
+     }
+    },
+    "runs": [
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.9,
+        "p95_us": 4.4,
+        "p99_us": 6.1,
+        "throughput_ops_per_s": 244271.82568762518,
+        "mean_us": 4.0938,
+        "min_us": 3.5,
+        "max_us": 71.1
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.3,
+        "p95_us": 4.5,
+        "p99_us": 5.0,
+        "throughput_ops_per_s": 229937.91676247417,
+        "mean_us": 4.349,
+        "min_us": 4.1,
+        "max_us": 11.2
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 4.1,
+        "p95_us": 4.4,
+        "p99_us": 5.5,
+        "throughput_ops_per_s": 243878.6459857575,
+        "mean_us": 4.1004,
+        "min_us": 3.7,
+        "max_us": 7.3
+       }
+      }
+     }
+    ]
+   }
+  },
+  "10000000": {
+   "records": 10000000,
+   "gets_per_kind": 100000,
+   "runs_planned": 3,
+   "runs_completed": 3,
+   "file_bytes_after_load": [
+    1240000000,
+    1240000000,
+    1240000000
+   ],
+   "file_bytes_final": [
+    1240148000,
+    1240148000,
+    1240148000
+   ],
+   "open_recovery_seconds": [
+    11.0220331,
+    10.9661741,
+    11.287263
+   ],
+   "open_recovery_seconds_median": 11.0220331,
+   "open_recovery_final_seconds": [
+    10.6763087,
+    10.7846951,
+    11.1034949
+   ],
+   "load_wall_seconds": [
+    61.89501509999991,
+    61.8802697000001,
+    62.58571400000005
+   ],
+   "aggregate_over_runs": {
+    "get_hit": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.8,
+      "min": 0.8,
+      "max": 0.8
+     },
+     "p95_us": {
+      "median": 1.3,
+      "min": 1.3,
+      "max": 1.3
+     },
+     "p99_us": {
+      "median": 1.7,
+      "min": 1.6,
+      "max": 1.7
+     },
+     "throughput_ops_per_s": {
+      "median": 1139196.0921017255,
+      "min": 1130179.755090047,
+      "max": 1139484.2694196606
+     },
+     "mean_us": {
+      "median": 0.877812,
+      "min": 0.87759,
+      "max": 0.884815
+     },
+     "min_us": {
+      "median": 0.4,
+      "min": 0.3,
+      "max": 0.4
+     },
+     "max_us": {
+      "median": 214.4,
+      "min": 212.0,
+      "max": 256.2
+     }
+    },
+    "get_miss": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.6,
+      "min": 0.5,
+      "max": 0.6
+     },
+     "p95_us": {
+      "median": 0.8,
+      "min": 0.8,
+      "max": 0.8
+     },
+     "p99_us": {
+      "median": 1.0,
+      "min": 1.0,
+      "max": 1.0
+     },
+     "throughput_ops_per_s": {
+      "median": 1677292.313472515,
+      "min": 1604837.6225293525,
+      "max": 1679650.363980234
+     },
+     "mean_us": {
+      "median": 0.5961989999999999,
+      "min": 0.595362,
+      "max": 0.623116
+     },
+     "min_us": {
+      "median": 0.2,
+      "min": 0.2,
+      "max": 0.3
+     },
+     "max_us": {
+      "median": 124.5,
+      "min": 123.8,
+      "max": 236.8
+     }
+    },
+    "control_noop": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p95_us": {
+      "median": 0.1,
+      "min": 0.1,
+      "max": 0.1
+     },
+     "p99_us": {
+      "median": 0.2,
+      "min": 0.1,
+      "max": 0.2
+     },
+     "throughput_ops_per_s": {
+      "median": 11000132.00158402,
+      "min": 10568255.0754045,
+      "max": 11561495.595070178
+     },
+     "mean_us": {
+      "median": 0.090908,
+      "min": 0.086494,
+      "max": 0.094623
+     },
+     "min_us": {
+      "median": 0.0,
+      "min": 0.0,
+      "max": 0.0
+     },
+     "max_us": {
+      "median": 44.2,
+      "min": 9.5,
+      "max": 173.5
+     }
+    },
+    "control_dict_get": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.5,
+      "min": 0.5,
+      "max": 0.5
+     },
+     "p95_us": {
+      "median": 0.9,
+      "min": 0.9,
+      "max": 1.0
+     },
+     "p99_us": {
+      "median": 1.2,
+      "min": 1.2,
+      "max": 1.3
+     },
+     "throughput_ops_per_s": {
+      "median": 1820495.5024658612,
+      "min": 1794726.3760167125,
+      "max": 1828634.9605746302
+     },
+     "mean_us": {
+      "median": 0.549301,
+      "min": 0.546856,
+      "max": 0.557188
+     },
+     "min_us": {
+      "median": 0.1,
+      "min": 0.0,
+      "max": 0.1
+     },
+     "max_us": {
+      "median": 133.8,
+      "min": 130.0,
+      "max": 167.5
+     }
+    },
+    "put_overwrite": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 4.7,
+      "min": 4.6,
+      "max": 5.1
+     },
+     "p95_us": {
+      "median": 5.9,
+      "min": 5.5,
+      "max": 8.2
+     },
+     "p99_us": {
+      "median": 11.7,
+      "min": 10.0,
+      "max": 30.3
+     },
+     "throughput_ops_per_s": {
+      "median": 182975.92036887945,
+      "min": 173626.1828283705,
+      "max": 193285.2697295939
+     },
+     "mean_us": {
+      "median": 5.465199999999999,
+      "min": 5.1737,
+      "max": 5.7595
+     },
+     "min_us": {
+      "median": 4.2,
+      "min": 4.1,
+      "max": 4.6
+     },
+     "max_us": {
+      "median": 112.9,
+      "min": 102.6,
+      "max": 150.0
+     }
+    },
+    "delete": {
+     "ops": {
+      "median": 1000,
+      "min": 1000,
+      "max": 1000
+     },
+     "p50_us": {
+      "median": 4.5,
+      "min": 4.5,
+      "max": 5.4
+     },
+     "p95_us": {
+      "median": 5.6,
+      "min": 5.3,
+      "max": 6.3
+     },
+     "p99_us": {
+      "median": 17.9,
+      "min": 14.3,
+      "max": 20.9
+     },
+     "throughput_ops_per_s": {
+      "median": 191175.3460273763,
+      "min": 159831.21823354537,
+      "max": 207258.18151671538
+     },
+     "mean_us": {
+      "median": 5.2308,
+      "min": 4.8248999999999995,
+      "max": 6.256600000000001
+     },
+     "min_us": {
+      "median": 4.1,
+      "min": 4.1,
+      "max": 4.9
+     },
+     "max_us": {
+      "median": 160.7,
+      "min": 33.6,
+      "max": 192.7
+     }
+    },
+    "put_load": {
+     "ops": {
+      "median": 10000000,
+      "min": 10000000,
+      "max": 10000000
+     },
+     "p50_us": {
+      "median": 4.6,
+      "min": 4.6,
+      "max": 4.7
+     },
+     "p95_us": {
+      "median": 6.1,
+      "min": 6.0,
+      "max": 6.2
+     },
+     "p99_us": {
+      "median": 11.6,
+      "min": 11.4,
+      "max": 11.8
+     },
+     "throughput_ops_per_s": {
+      "median": 192682.54990930366,
+      "min": 190585.13910624434,
+      "max": 192992.476749902
+     },
+     "mean_us": {
+      "median": 5.18988357,
+      "min": 5.1815491300000005,
+      "max": 5.24699882
+     },
+     "min_us": {
+      "median": 3.6,
+      "min": 3.6,
+      "max": 3.6
+     },
+     "max_us": {
+      "median": 172504.8,
+      "min": 166808.6,
+      "max": 185694.4
+     }
+    }
+   },
+   "pooled_all_runs": {
+    "get_hit": {
+     "ops": 300000,
+     "p50_us": 0.8,
+     "p95_us": 1.3,
+     "p99_us": 1.7,
+     "throughput_ops_per_s": 1136270.2383932834,
+     "mean_us": 0.8800723333333333,
+     "min_us": 0.3,
+     "max_us": 256.2
+    },
+    "get_miss": {
+     "ops": 300000,
+     "p50_us": 0.6,
+     "p95_us": 0.8,
+     "p99_us": 1.0,
+     "throughput_ops_per_s": 1653186.7654684552,
+     "mean_us": 0.6048923333333334,
+     "min_us": 0.2,
+     "max_us": 236.8
+    },
+    "control_noop": {
+     "ops": 300000,
+     "p50_us": 0.1,
+     "p95_us": 0.1,
+     "p99_us": 0.2,
+     "throughput_ops_per_s": 11028398.125172319,
+     "mean_us": 0.09067499999999999,
+     "min_us": 0.0,
+     "max_us": 173.5
+    },
+    "control_dict_get": {
+     "ops": 300000,
+     "p50_us": 0.5,
+     "p95_us": 0.9,
+     "p99_us": 1.2,
+     "throughput_ops_per_s": 1814503.3250773433,
+     "mean_us": 0.551115,
+     "min_us": 0.0,
+     "max_us": 167.5
+    },
+    "put_overwrite": {
+     "ops": 3000,
+     "p50_us": 4.8,
+     "p95_us": 6.0,
+     "p99_us": 22.7,
+     "throughput_ops_per_s": 182944.67752951506,
+     "mean_us": 5.4661333333333335,
+     "min_us": 4.1,
+     "max_us": 150.0
+    },
+    "delete": {
+     "ops": 3000,
+     "p50_us": 4.7,
+     "p95_us": 6.1,
+     "p99_us": 16.0,
+     "throughput_ops_per_s": 183910.30081594872,
+     "mean_us": 5.437433333333334,
+     "min_us": 4.1,
+     "max_us": 192.7
+    }
+   },
+   "runs": [
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.8,
+       "p95_us": 1.3,
+       "p99_us": 1.7,
+       "throughput_ops_per_s": 1139484.2694196606,
+       "mean_us": 0.87759,
+       "min_us": 0.3,
+       "max_us": 256.2
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.6,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1677292.313472515,
+       "mean_us": 0.5961989999999999,
+       "min_us": 0.2,
+       "max_us": 124.5
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 10568255.0754045,
+       "mean_us": 0.094623,
+       "min_us": 0.0,
+       "max_us": 173.5
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.9,
+       "p99_us": 1.2,
+       "throughput_ops_per_s": 1820495.5024658612,
+       "mean_us": 0.549301,
+       "min_us": 0.1,
+       "max_us": 167.5
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.6,
+       "p95_us": 8.2,
+       "p99_us": 30.3,
+       "throughput_ops_per_s": 173626.1828283705,
+       "mean_us": 5.7595,
+       "min_us": 4.1,
+       "max_us": 150.0
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.5,
+       "p95_us": 5.3,
+       "p99_us": 14.3,
+       "throughput_ops_per_s": 207258.18151671538,
+       "mean_us": 4.8248999999999995,
+       "min_us": 4.1,
+       "max_us": 33.6
+      },
+      "put_load": {
+       "ops": 10000000,
+       "p50_us": 4.6,
+       "p95_us": 6.0,
+       "p99_us": 11.8,
+       "throughput_ops_per_s": 192992.476749902,
+       "mean_us": 5.1815491300000005,
+       "min_us": 3.6,
+       "max_us": 185694.4
+      }
+     },
+     "open_recovery_ns": 11022033100,
+     "open_recovery_final_ns": 10676308700,
+     "load_wall_seconds": 61.89501509999991,
+     "file_bytes_after_load": 1240000000,
+     "file_bytes_final": 1240148000,
+     "memtable_entries": 10000000,
+     "tombstoned_keys_final": 1000,
+     "records_replayed_at_open": 10000000,
+     "records_replayed_at_final_reopen": 10002000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.8,
+       "p95_us": 1.3,
+       "p99_us": 1.7,
+       "throughput_ops_per_s": 1139196.0921017255,
+       "mean_us": 0.877812,
+       "min_us": 0.4,
+       "max_us": 214.4
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.6,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1604837.6225293525,
+       "mean_us": 0.623116,
+       "min_us": 0.3,
+       "max_us": 123.8
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.2,
+       "throughput_ops_per_s": 11000132.00158402,
+       "mean_us": 0.090908,
+       "min_us": 0.0,
+       "max_us": 9.5
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 1.0,
+       "p99_us": 1.3,
+       "throughput_ops_per_s": 1794726.3760167125,
+       "mean_us": 0.557188,
+       "min_us": 0.0,
+       "max_us": 133.8
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 5.1,
+       "p95_us": 5.9,
+       "p99_us": 10.0,
+       "throughput_ops_per_s": 182975.92036887945,
+       "mean_us": 5.465199999999999,
+       "min_us": 4.6,
+       "max_us": 102.6
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 5.4,
+       "p95_us": 6.3,
+       "p99_us": 17.9,
+       "throughput_ops_per_s": 159831.21823354537,
+       "mean_us": 6.256600000000001,
+       "min_us": 4.9,
+       "max_us": 160.7
+      },
+      "put_load": {
+       "ops": 10000000,
+       "p50_us": 4.6,
+       "p95_us": 6.1,
+       "p99_us": 11.4,
+       "throughput_ops_per_s": 192682.54990930366,
+       "mean_us": 5.18988357,
+       "min_us": 3.6,
+       "max_us": 172504.8
+      }
+     },
+     "open_recovery_ns": 10966174100,
+     "open_recovery_final_ns": 10784695100,
+     "load_wall_seconds": 61.8802697000001,
+     "file_bytes_after_load": 1240000000,
+     "file_bytes_final": 1240148000,
+     "memtable_entries": 10000000,
+     "tombstoned_keys_final": 1000,
+     "records_replayed_at_open": 10000000,
+     "records_replayed_at_final_reopen": 10002000
+    },
+    {
+     "summary": {
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.8,
+       "p95_us": 1.3,
+       "p99_us": 1.6,
+       "throughput_ops_per_s": 1130179.755090047,
+       "mean_us": 0.884815,
+       "min_us": 0.4,
+       "max_us": 212.0
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.8,
+       "p99_us": 1.0,
+       "throughput_ops_per_s": 1679650.363980234,
+       "mean_us": 0.595362,
+       "min_us": 0.2,
+       "max_us": 236.8
+      },
+      "control_noop": {
+       "ops": 100000,
+       "p50_us": 0.1,
+       "p95_us": 0.1,
+       "p99_us": 0.1,
+       "throughput_ops_per_s": 11561495.595070178,
+       "mean_us": 0.086494,
+       "min_us": 0.0,
+       "max_us": 44.2
+      },
+      "control_dict_get": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 0.9,
+       "p99_us": 1.2,
+       "throughput_ops_per_s": 1828634.9605746302,
+       "mean_us": 0.546856,
+       "min_us": 0.1,
+       "max_us": 130.0
+      },
+      "put_overwrite": {
+       "ops": 1000,
+       "p50_us": 4.7,
+       "p95_us": 5.5,
+       "p99_us": 11.7,
+       "throughput_ops_per_s": 193285.2697295939,
+       "mean_us": 5.1737,
+       "min_us": 4.2,
+       "max_us": 112.9
+      },
+      "delete": {
+       "ops": 1000,
+       "p50_us": 4.5,
+       "p95_us": 5.6,
+       "p99_us": 20.9,
+       "throughput_ops_per_s": 191175.3460273763,
+       "mean_us": 5.2308,
+       "min_us": 4.1,
+       "max_us": 192.7
+      },
+      "put_load": {
+       "ops": 10000000,
+       "p50_us": 4.7,
+       "p95_us": 6.2,
+       "p99_us": 11.6,
+       "throughput_ops_per_s": 190585.13910624434,
+       "mean_us": 5.24699882,
+       "min_us": 3.6,
+       "max_us": 166808.6
+      }
+     },
+     "open_recovery_ns": 11287263000,
+     "open_recovery_final_ns": 11103494900,
+     "load_wall_seconds": 62.58571400000005,
+     "file_bytes_after_load": 1240000000,
+     "file_bytes_final": 1240148000,
+     "memtable_entries": 10000000,
+     "tombstoned_keys_final": 1000,
+     "records_replayed_at_open": 10000000,
+     "records_replayed_at_final_reopen": 10002000
+    }
+   ],
+   "memory_probes": [
+    {
+     "load": {
+      "private_delta": 2272526336,
+      "working_set_delta": 2267414528,
+      "peak_working_set_after": 2287849472,
+      "private_after": 2285019136,
+      "private_before": 12492800
+     },
+     "open": {
+      "private_delta": 2273112064,
+      "working_set_delta": 2267422720,
+      "peak_working_set_after": 2287738880,
+      "private_after": 2285633536,
+      "private_before": 12521472
+     }
+    },
+    {
+     "load": {
+      "private_delta": 2272509952,
+      "working_set_delta": 2267414528,
+      "peak_working_set_after": 2287677440,
+      "private_after": 2284998656,
+      "private_before": 12488704
+     },
+     "open": {
+      "private_delta": 2273415168,
+      "working_set_delta": 2267480064,
+      "peak_working_set_after": 2287779840,
+      "private_after": 2285944832,
+      "private_before": 12529664
+     }
+    },
+    {
+     "load": {
+      "private_delta": 2272530432,
+      "working_set_delta": 2267418624,
+      "peak_working_set_after": 2287669248,
+      "private_after": 2284978176,
+      "private_before": 12447744
+     },
+     "open": {
+      "private_delta": 2272526336,
+      "working_set_delta": 2267406336,
+      "peak_working_set_after": 2288041984,
+      "private_after": 2285203456,
+      "private_before": 12677120
+     }
+    }
+   ],
+   "v0_delete": {
+    "runs_completed": 3,
+    "aggregate_over_runs": {
+     "delete": {
+      "ops": {
+       "median": 1000,
+       "min": 1000,
+       "max": 1000
+      },
+      "p50_us": {
+       "median": 3.8,
+       "min": 3.6,
+       "max": 3.8
+      },
+      "p95_us": {
+       "median": 4.1,
+       "min": 3.8,
+       "max": 4.2
+      },
+      "p99_us": {
+       "median": 6.4,
+       "min": 4.7,
+       "max": 6.9
+      },
+      "throughput_ops_per_s": {
+       "median": 252410.52047049324,
+       "min": 250193.90027271133,
+       "max": 273845.05846592
+      },
+      "mean_us": {
+       "median": 3.9618,
+       "min": 3.6517,
+       "max": 3.9969
+      },
+      "min_us": {
+       "median": 3.5,
+       "min": 3.4,
+       "max": 3.6
+      },
+      "max_us": {
+       "median": 47.6,
+       "min": 39.9,
+       "max": 47.9
+      }
+     }
+    },
+    "pooled_all_runs": {
+     "delete": {
+      "ops": 3000,
+      "p50_us": 3.7,
+      "p95_us": 4.1,
+      "p99_us": 6.1,
+      "throughput_ops_per_s": 258389.03052435748,
+      "mean_us": 3.8701333333333334,
+      "min_us": 3.4,
+      "max_us": 47.9
+     }
+    },
+    "runs": [
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.8,
+        "p95_us": 4.2,
+        "p99_us": 6.9,
+        "throughput_ops_per_s": 250193.90027271133,
+        "mean_us": 3.9969,
+        "min_us": 3.6,
+        "max_us": 47.6
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.8,
+        "p95_us": 4.1,
+        "p99_us": 6.4,
+        "throughput_ops_per_s": 252410.52047049324,
+        "mean_us": 3.9618,
+        "min_us": 3.5,
+        "max_us": 47.9
+       }
+      }
+     },
+     {
+      "summary": {
+       "delete": {
+        "ops": 1000,
+        "p50_us": 3.6,
+        "p95_us": 3.8,
+        "p99_us": 4.7,
+        "throughput_ops_per_s": 273845.05846592,
+        "mean_us": 3.6517,
+        "min_us": 3.4,
+        "max_us": 39.9
+       }
+      }
+     }
+    ]
+   }
+  }
+ },
+ "baseline": {
+  "same_workload_as_v0": {
+   "workload": {
+    "keyspace": 10000,
+    "n_get_ops": 200,
+    "n_mixed_ops": 300,
+    "n_sync_puts": 300
+   },
+   "runs_completed": 5,
+   "aggregate_over_runs": {
+    "put_load": {
+     "ops": {
+      "median": 10000,
+      "min": 10000,
+      "max": 10000
+     },
+     "p50_us": {
+      "median": 4.2,
+      "min": 3.9,
+      "max": 4.4
+     },
+     "p95_us": {
+      "median": 5.3,
+      "min": 4.9,
+      "max": 6.1
+     },
+     "p99_us": {
+      "median": 7.9,
+      "min": 6.3,
+      "max": 14.2
+     },
+     "throughput_ops_per_s": {
+      "median": 224044.45041896313,
+      "min": 216253.62224817267,
+      "max": 235402.67982410712
+     }
+    },
+    "get_hit": {
+     "ops": {
+      "median": 100,
+      "min": 100,
+      "max": 100
+     },
+     "p50_us": {
+      "median": 0.5,
+      "min": 0.4,
+      "max": 0.7
+     },
+     "p95_us": {
+      "median": 0.7,
+      "min": 0.5,
+      "max": 1.2
+     },
+     "p99_us": {
+      "median": 3.4,
+      "min": 2.7,
+      "max": 11.4
+     },
+     "throughput_ops_per_s": {
+      "median": 1996007.9840319362,
+      "min": 1052631.5789473683,
+      "max": 2439024.3902439023
+     }
+    },
+    "get_miss": {
+     "ops": {
+      "median": 100,
+      "min": 100,
+      "max": 100
+     },
+     "p50_us": {
+      "median": 0.3,
+      "min": 0.3,
+      "max": 0.4
+     },
+     "p95_us": {
+      "median": 0.6,
+      "min": 0.4,
+      "max": 2.5
+     },
+     "p99_us": {
+      "median": 0.7,
+      "min": 0.6,
+      "max": 94.0
+     },
+     "throughput_ops_per_s": {
+      "median": 2392344.4976076554,
+      "min": 698812.0195667365,
+      "max": 2985074.6268656715
+     }
+    },
+    "mixed_all": {
+     "ops": {
+      "median": 300,
+      "min": 300,
+      "max": 300
+     },
+     "p50_us": {
+      "median": 0.5,
+      "min": 0.4,
+      "max": 0.6
+     },
+     "p95_us": {
+      "median": 4.6,
+      "min": 4.3,
+      "max": 5.4
+     },
+     "p99_us": {
+      "median": 8.8,
+      "min": 6.8,
+      "max": 17.0
+     },
+     "throughput_ops_per_s": {
+      "median": 505902.192242833,
+      "min": 472366.5564478035,
+      "max": 598324.6908655764
+     }
+    },
+    "mixed_get": {
+     "ops": {
+      "median": 209,
+      "min": 209,
+      "max": 209
+     },
+     "p50_us": {
+      "median": 0.5,
+      "min": 0.4,
+      "max": 0.5
+     },
+     "p95_us": {
+      "median": 0.6,
+      "min": 0.6,
+      "max": 0.8
+     },
+     "p99_us": {
+      "median": 0.8,
+      "min": 0.6,
+      "max": 0.9
+     },
+     "throughput_ops_per_s": {
+      "median": 1781756.1807331627,
+      "min": 1505763.6887608068,
+      "max": 2343049.3273542603
+     }
+    },
+    "mixed_put": {
+     "ops": {
+      "median": 80,
+      "min": 80,
+      "max": 80
+     },
+     "p50_us": {
+      "median": 4.4,
+      "min": 4.1,
+      "max": 4.9
+     },
+     "p95_us": {
+      "median": 6.8,
+      "min": 5.3,
+      "max": 7.2
+     },
+     "p99_us": {
+      "median": 28.5,
+      "min": 7.0,
+      "max": 36.1
+     },
+     "throughput_ops_per_s": {
+      "median": 202122.28398180899,
+      "min": 179613.8302649304,
+      "max": 224089.63585434173
+     }
+    },
+    "mixed_delete": {
+     "ops": {
+      "median": 11,
+      "min": 11,
+      "max": 11
+     },
+     "p50_us": {
+      "median": 4.4,
+      "min": 4.1,
+      "max": 4.9
+     },
+     "p95_us": {
+      "median": 16.8,
+      "min": 10.2,
+      "max": 29.7
+     },
+     "p99_us": {
+      "median": 16.8,
+      "min": 10.2,
+      "max": 29.7
+     },
+     "throughput_ops_per_s": {
+      "median": 172684.45839874411,
+      "min": 139064.47534766118,
+      "max": 199275.36231884058
+     }
+    },
+    "put_sync": {
+     "ops": {
+      "median": 300,
+      "min": 300,
+      "max": 300
+     },
+     "p50_us": {
+      "median": 1898.5,
+      "min": 1885.2,
+      "max": 1954.2
+     },
+     "p95_us": {
+      "median": 2254.4,
+      "min": 2111.3,
+      "max": 3817.6
+     },
+     "p99_us": {
+      "median": 3873.4,
+      "min": 3744.8,
+      "max": 4769.5
+     },
+     "throughput_ops_per_s": {
+      "median": 506.2633210536352,
+      "min": 437.0750355851925,
+      "max": 514.5344843584089
+     }
+    }
+   },
+   "file_bytes_after_load": [
+    1240000,
+    1240000,
+    1240000,
+    1240000,
+    1240000
+   ],
+   "file_bytes_after_mixed": [
+    1250184,
+    1250184,
+    1250184,
+    1250184,
+    1250184
+   ],
+   "runs": [
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.2,
+       "p95_us": 4.9,
+       "p99_us": 7.0,
+       "throughput_ops_per_s": 224044.45041896313
+      },
+      "get_hit": {
+       "ops": 100,
+       "p50_us": 0.6,
+       "p95_us": 0.8,
+       "p99_us": 6.1,
+       "throughput_ops_per_s": 1612903.2258064516
+      },
+      "get_miss": {
+       "ops": 100,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2392344.4976076554
+      },
+      "mixed_all": {
+       "ops": 300,
+       "p50_us": 0.6,
+       "p95_us": 5.4,
+       "p99_us": 16.8,
+       "throughput_ops_per_s": 477630.9504855914
+      },
+      "mixed_get": {
+       "ops": 209,
+       "p50_us": 0.5,
+       "p95_us": 0.7,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 1781756.1807331627
+      },
+      "mixed_put": {
+       "ops": 80,
+       "p50_us": 4.9,
+       "p95_us": 7.2,
+       "p99_us": 30.9,
+       "throughput_ops_per_s": 179613.8302649304
+      },
+      "mixed_delete": {
+       "ops": 11,
+       "p50_us": 4.8,
+       "p95_us": 16.8,
+       "p99_us": 16.8,
+       "throughput_ops_per_s": 168195.71865443425
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1896.5,
+       "p95_us": 2127.2,
+       "p99_us": 3744.8,
+       "throughput_ops_per_s": 514.5344843584089
+      }
+     }
+    },
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.4,
+       "p95_us": 5.8,
+       "p99_us": 7.9,
+       "throughput_ops_per_s": 216253.62224817267
+      },
+      "get_hit": {
+       "ops": 100,
+       "p50_us": 0.7,
+       "p95_us": 1.2,
+       "p99_us": 11.4,
+       "throughput_ops_per_s": 1052631.5789473683
+      },
+      "get_miss": {
+       "ops": 100,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 2392344.4976076554
+      },
+      "mixed_all": {
+       "ops": 300,
+       "p50_us": 0.6,
+       "p95_us": 5.3,
+       "p99_us": 8.8,
+       "throughput_ops_per_s": 472366.5564478035
+      },
+      "mixed_get": {
+       "ops": 209,
+       "p50_us": 0.5,
+       "p95_us": 0.8,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 1778723.4042553192
+      },
+      "mixed_put": {
+       "ops": 80,
+       "p50_us": 4.9,
+       "p95_us": 7.0,
+       "p99_us": 36.1,
+       "throughput_ops_per_s": 182440.13683010262
+      },
+      "mixed_delete": {
+       "ops": 11,
+       "p50_us": 4.9,
+       "p95_us": 29.7,
+       "p99_us": 29.7,
+       "throughput_ops_per_s": 139064.47534766118
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1954.2,
+       "p95_us": 3817.6,
+       "p99_us": 4127.0,
+       "throughput_ops_per_s": 456.0224837325379
+      }
+     }
+    },
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.0,
+       "p95_us": 6.1,
+       "p99_us": 14.2,
+       "throughput_ops_per_s": 217818.8923038051
+      },
+      "get_hit": {
+       "ops": 100,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 3.4,
+       "throughput_ops_per_s": 2159827.2138228943
+      },
+      "get_miss": {
+       "ops": 100,
+       "p50_us": 0.3,
+       "p95_us": 0.4,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 2915451.8950437317
+      },
+      "mixed_all": {
+       "ops": 300,
+       "p50_us": 0.5,
+       "p95_us": 4.6,
+       "p99_us": 17.0,
+       "throughput_ops_per_s": 505902.192242833
+      },
+      "mixed_get": {
+       "ops": 209,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 1505763.6887608068
+      },
+      "mixed_put": {
+       "ops": 80,
+       "p50_us": 4.3,
+       "p95_us": 6.8,
+       "p99_us": 28.5,
+       "throughput_ops_per_s": 202122.28398180899
+      },
+      "mixed_delete": {
+       "ops": 11,
+       "p50_us": 4.4,
+       "p95_us": 12.5,
+       "p99_us": 12.5,
+       "throughput_ops_per_s": 188356.16438356164
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1885.2,
+       "p95_us": 2111.3,
+       "p99_us": 3873.4,
+       "throughput_ops_per_s": 511.88782694915363
+      }
+     }
+    },
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.2,
+       "p95_us": 5.0,
+       "p99_us": 6.3,
+       "throughput_ops_per_s": 224379.254791619
+      },
+      "get_hit": {
+       "ops": 100,
+       "p50_us": 0.5,
+       "p95_us": 0.7,
+       "p99_us": 2.9,
+       "throughput_ops_per_s": 1996007.9840319362
+      },
+      "get_miss": {
+       "ops": 100,
+       "p50_us": 0.3,
+       "p95_us": 2.5,
+       "p99_us": 94.0,
+       "throughput_ops_per_s": 698812.0195667365
+      },
+      "mixed_all": {
+       "ops": 300,
+       "p50_us": 0.5,
+       "p95_us": 4.6,
+       "p99_us": 6.8,
+       "throughput_ops_per_s": 572191.4934197979
+      },
+      "mixed_get": {
+       "ops": 209,
+       "p50_us": 0.5,
+       "p95_us": 0.6,
+       "p99_us": 0.8,
+       "throughput_ops_per_s": 2083748.7537387838
+      },
+      "mixed_put": {
+       "ops": 80,
+       "p50_us": 4.4,
+       "p95_us": 5.5,
+       "p99_us": 7.0,
+       "throughput_ops_per_s": 222037.19122953096
+      },
+      "mixed_delete": {
+       "ops": 11,
+       "p50_us": 4.3,
+       "p95_us": 20.7,
+       "p99_us": 20.7,
+       "throughput_ops_per_s": 172684.45839874411
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1898.5,
+       "p95_us": 2254.4,
+       "p99_us": 4769.5,
+       "throughput_ops_per_s": 437.0750355851925
+      }
+     }
+    },
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 3.9,
+       "p95_us": 5.3,
+       "p99_us": 9.2,
+       "throughput_ops_per_s": 235402.67982410712
+      },
+      "get_hit": {
+       "ops": 100,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 2.7,
+       "throughput_ops_per_s": 2439024.3902439023
+      },
+      "get_miss": {
+       "ops": 100,
+       "p50_us": 0.3,
+       "p95_us": 0.4,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 2985074.6268656715
+      },
+      "mixed_all": {
+       "ops": 300,
+       "p50_us": 0.4,
+       "p95_us": 4.3,
+       "p99_us": 8.3,
+       "throughput_ops_per_s": 598324.6908655764
+      },
+      "mixed_get": {
+       "ops": 209,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 2343049.3273542603
+      },
+      "mixed_put": {
+       "ops": 80,
+       "p50_us": 4.1,
+       "p95_us": 5.3,
+       "p99_us": 25.9,
+       "throughput_ops_per_s": 224089.63585434173
+      },
+      "mixed_delete": {
+       "ops": 11,
+       "p50_us": 4.1,
+       "p95_us": 10.2,
+       "p99_us": 10.2,
+       "throughput_ops_per_s": 199275.36231884058
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1910.6,
+       "p95_us": 2294.4,
+       "p99_us": 3783.9,
+       "throughput_ops_per_s": 506.2633210536352
+      }
+     }
+    }
+   ]
+  },
+  "extended_v1_only": {
+   "workload": {
+    "keyspace": 10000,
+    "n_get_ops": 200000,
+    "n_mixed_ops": 100000,
+    "n_sync_puts": 300
+   },
+   "runs_completed": 5,
+   "aggregate_over_runs": {
+    "put_load": {
+     "ops": {
+      "median": 10000,
+      "min": 10000,
+      "max": 10000
+     },
+     "p50_us": {
+      "median": 4.7,
+      "min": 3.9,
+      "max": 4.8
+     },
+     "p95_us": {
+      "median": 5.8,
+      "min": 4.8,
+      "max": 7.8
+     },
+     "p99_us": {
+      "median": 10.5,
+      "min": 9.3,
+      "max": 16.4
+     },
+     "throughput_ops_per_s": {
+      "median": 195925.1487561692,
+      "min": 183610.5546691246,
+      "max": 233793.43882093293
+     }
+    },
+    "get_hit": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.4
+     },
+     "p95_us": {
+      "median": 0.5,
+      "min": 0.5,
+      "max": 0.5
+     },
+     "p99_us": {
+      "median": 0.7,
+      "min": 0.6,
+      "max": 0.7
+     },
+     "throughput_ops_per_s": {
+      "median": 2406947.413012921,
+      "min": 2382694.0168170542,
+      "max": 2585950.5307663465
+     }
+    },
+    "get_miss": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.3,
+      "min": 0.3,
+      "max": 0.4
+     },
+     "p95_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.5
+     },
+     "p99_us": {
+      "median": 0.5,
+      "min": 0.5,
+      "max": 0.6
+     },
+     "throughput_ops_per_s": {
+      "median": 2701512.576891802,
+      "min": 2624031.404407848,
+      "max": 2893158.547981588
+     }
+    },
+    "mixed_all": {
+     "ops": {
+      "median": 100000,
+      "min": 100000,
+      "max": 100000
+     },
+     "p50_us": {
+      "median": 0.5,
+      "min": 0.5,
+      "max": 0.5
+     },
+     "p95_us": {
+      "median": 5.0,
+      "min": 4.5,
+      "max": 5.3
+     },
+     "p99_us": {
+      "median": 5.9,
+      "min": 5.6,
+      "max": 6.7
+     },
+     "throughput_ops_per_s": {
+      "median": 556641.9350654917,
+      "min": 501558.3417678728,
+      "max": 581847.9724343704
+     }
+    },
+    "mixed_get": {
+     "ops": {
+      "median": 70184,
+      "min": 70184,
+      "max": 70184
+     },
+     "p50_us": {
+      "median": 0.4,
+      "min": 0.4,
+      "max": 0.5
+     },
+     "p95_us": {
+      "median": 0.6,
+      "min": 0.6,
+      "max": 0.7
+     },
+     "p99_us": {
+      "median": 0.8,
+      "min": 0.7,
+      "max": 0.9
+     },
+     "throughput_ops_per_s": {
+      "median": 2035540.1646785175,
+      "min": 1951832.6936982037,
+      "max": 2119178.1028730166
+     }
+    },
+    "mixed_put": {
+     "ops": {
+      "median": 24813,
+      "min": 24813,
+      "max": 24813
+     },
+     "p50_us": {
+      "median": 4.5,
+      "min": 4.2,
+      "max": 4.9
+     },
+     "p95_us": {
+      "median": 5.5,
+      "min": 5.3,
+      "max": 6.4
+     },
+     "p99_us": {
+      "median": 10.1,
+      "min": 9.2,
+      "max": 15.6
+     },
+     "throughput_ops_per_s": {
+      "median": 203009.84409158147,
+      "min": 177580.21991234424,
+      "max": 214330.6927460294
+     }
+    },
+    "mixed_delete": {
+     "ops": {
+      "median": 5003,
+      "min": 5003,
+      "max": 5003
+     },
+     "p50_us": {
+      "median": 4.4,
+      "min": 4.2,
+      "max": 4.8
+     },
+     "p95_us": {
+      "median": 5.2,
+      "min": 5.1,
+      "max": 6.1
+     },
+     "p99_us": {
+      "median": 9.1,
+      "min": 7.9,
+      "max": 11.1
+     },
+     "throughput_ops_per_s": {
+      "median": 210560.42827561824,
+      "min": 196713.70547597794,
+      "max": 217730.00261119334
+     }
+    },
+    "put_sync": {
+     "ops": {
+      "median": 300,
+      "min": 300,
+      "max": 300
+     },
+     "p50_us": {
+      "median": 1883.5,
+      "min": 1856.4,
+      "max": 1929.8
+     },
+     "p95_us": {
+      "median": 2177.3,
+      "min": 2075.2,
+      "max": 2315.3
+     },
+     "p99_us": {
+      "median": 3962.2,
+      "min": 3738.5,
+      "max": 4011.6
+     },
+     "throughput_ops_per_s": {
+      "median": 514.4151999403277,
+      "min": 499.48212028828107,
+      "max": 521.9396460309708
+     }
+    }
+   },
+   "file_bytes_after_load": [
+    1240000,
+    1240000,
+    1240000,
+    1240000,
+    1240000
+   ],
+   "file_bytes_after_mixed": [
+    4436884,
+    4436884,
+    4436884,
+    4436884,
+    4436884
+   ],
+   "runs": [
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.0,
+       "p95_us": 4.9,
+       "p99_us": 9.3,
+       "throughput_ops_per_s": 220345.8548537785
+      },
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2404979.2690787003
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.3,
+       "p95_us": 0.4,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 2665230.9955703863
+      },
+      "mixed_all": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 4.9,
+       "p99_us": 5.6,
+       "throughput_ops_per_s": 568544.5883936171
+      },
+      "mixed_get": {
+       "ops": 70184,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2035540.1646785175
+      },
+      "mixed_put": {
+       "ops": 24813,
+       "p50_us": 4.4,
+       "p95_us": 5.3,
+       "p99_us": 9.2,
+       "throughput_ops_per_s": 210837.666128236
+      },
+      "mixed_delete": {
+       "ops": 5003,
+       "p50_us": 4.3,
+       "p95_us": 5.2,
+       "p99_us": 9.1,
+       "throughput_ops_per_s": 210912.83140885388
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1922.9,
+       "p95_us": 2197.7,
+       "p99_us": 4011.6,
+       "throughput_ops_per_s": 501.3183837963204
+      }
+     }
+    },
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 3.9,
+       "p95_us": 4.8,
+       "p99_us": 10.5,
+       "throughput_ops_per_s": 233793.43882093293
+      },
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2585950.5307663465
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.3,
+       "p95_us": 0.4,
+       "p99_us": 0.5,
+       "throughput_ops_per_s": 2893158.547981588
+      },
+      "mixed_all": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 5.0,
+       "p99_us": 5.7,
+       "throughput_ops_per_s": 556641.9350654917
+      },
+      "mixed_get": {
+       "ops": 70184,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2084918.9161891353
+      },
+      "mixed_put": {
+       "ops": 24813,
+       "p50_us": 4.5,
+       "p95_us": 5.5,
+       "p99_us": 9.6,
+       "throughput_ops_per_s": 203009.84409158147
+      },
+      "mixed_delete": {
+       "ops": 5003,
+       "p50_us": 4.4,
+       "p95_us": 5.2,
+       "p99_us": 7.9,
+       "throughput_ops_per_s": 210560.42827561824
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1880.8,
+       "p95_us": 2141.9,
+       "p99_us": 3738.5,
+       "throughput_ops_per_s": 515.754583339064
+      }
+     }
+    },
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.8,
+       "p95_us": 5.8,
+       "p99_us": 11.0,
+       "throughput_ops_per_s": 195925.1487561692
+      },
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2406947.413012921
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.3,
+       "p95_us": 0.4,
+       "p99_us": 0.5,
+       "throughput_ops_per_s": 2748921.7354492703
+      },
+      "mixed_all": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 4.5,
+       "p99_us": 5.9,
+       "throughput_ops_per_s": 581847.9724343704
+      },
+      "mixed_get": {
+       "ops": 70184,
+       "p50_us": 0.4,
+       "p95_us": 0.6,
+       "p99_us": 0.8,
+       "throughput_ops_per_s": 2119178.1028730166
+      },
+      "mixed_put": {
+       "ops": 24813,
+       "p50_us": 4.2,
+       "p95_us": 5.3,
+       "p99_us": 12.8,
+       "throughput_ops_per_s": 214330.6927460294
+      },
+      "mixed_delete": {
+       "ops": 5003,
+       "p50_us": 4.2,
+       "p95_us": 5.1,
+       "p99_us": 11.1,
+       "throughput_ops_per_s": 217730.00261119334
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1929.8,
+       "p95_us": 2315.3,
+       "p99_us": 3989.6,
+       "throughput_ops_per_s": 499.48212028828107
+      }
+     }
+    },
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.7,
+       "p95_us": 7.8,
+       "p99_us": 9.8,
+       "throughput_ops_per_s": 183610.5546691246
+      },
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 2450674.0578996255
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.6,
+       "throughput_ops_per_s": 2624031.404407848
+      },
+      "mixed_all": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 5.0,
+       "p99_us": 6.0,
+       "throughput_ops_per_s": 501558.3417678728
+      },
+      "mixed_get": {
+       "ops": 70184,
+       "p50_us": 0.5,
+       "p95_us": 0.6,
+       "p99_us": 0.8,
+       "throughput_ops_per_s": 2030728.2775382656
+      },
+      "mixed_put": {
+       "ops": 24813,
+       "p50_us": 4.8,
+       "p95_us": 5.6,
+       "p99_us": 15.6,
+       "throughput_ops_per_s": 177580.21991234424
+      },
+      "mixed_delete": {
+       "ops": 5003,
+       "p50_us": 4.7,
+       "p95_us": 5.3,
+       "p99_us": 9.8,
+       "throughput_ops_per_s": 199408.51043476874
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1883.5,
+       "p95_us": 2177.3,
+       "p99_us": 3903.2,
+       "throughput_ops_per_s": 514.4151999403277
+      }
+     }
+    },
+    {
+     "summary": {
+      "put_load": {
+       "ops": 10000,
+       "p50_us": 4.7,
+       "p95_us": 6.1,
+       "p99_us": 16.4,
+       "throughput_ops_per_s": 192311.76044108626
+      },
+      "get_hit": {
+       "ops": 100000,
+       "p50_us": 0.4,
+       "p95_us": 0.5,
+       "p99_us": 0.7,
+       "throughput_ops_per_s": 2382694.0168170542
+      },
+      "get_miss": {
+       "ops": 100000,
+       "p50_us": 0.3,
+       "p95_us": 0.4,
+       "p99_us": 0.5,
+       "throughput_ops_per_s": 2701512.576891802
+      },
+      "mixed_all": {
+       "ops": 100000,
+       "p50_us": 0.5,
+       "p95_us": 5.3,
+       "p99_us": 6.7,
+       "throughput_ops_per_s": 516039.54101379064
+      },
+      "mixed_get": {
+       "ops": 70184,
+       "p50_us": 0.5,
+       "p95_us": 0.7,
+       "p99_us": 0.9,
+       "throughput_ops_per_s": 1951832.6936982037
+      },
+      "mixed_put": {
+       "ops": 24813,
+       "p50_us": 4.9,
+       "p95_us": 6.4,
+       "p99_us": 10.1,
+       "throughput_ops_per_s": 187419.69912238364
+      },
+      "mixed_delete": {
+       "ops": 5003,
+       "p50_us": 4.8,
+       "p95_us": 6.1,
+       "p99_us": 8.0,
+       "throughput_ops_per_s": 196713.70547597794
+      },
+      "put_sync": {
+       "ops": 300,
+       "p50_us": 1856.4,
+       "p95_us": 2075.2,
+       "p99_us": 3962.2,
+       "throughput_ops_per_s": 521.9396460309708
+      }
+     }
+    }
+   ]
+  }
+ },
+ "analysis": {
+  "scales_used": [
+   10000,
+   100000,
+   1000000,
+   5000000,
+   10000000
+  ],
+  "get_hit_p50_us": {
+   "v1_us": [
+    0.4,
+    0.5,
+    0.7,
+    0.7,
+    0.8
+   ],
+   "v0_us": [
+    7816.1,
+    80706.5,
+    812992.4,
+    4100732.3,
+    7841656.8
+   ],
+   "v0_over_v1": [
+    19540.25,
+    161413.0,
+    1161417.7142857143,
+    5858189.0,
+    9802071.0
+   ]
+  },
+  "get_hit_p95_us": {
+   "v1_us": [
+    0.6,
+    0.8,
+    1.2,
+    1.2,
+    1.3
+   ],
+   "v0_us": [
+    9425.0,
+    89510.4,
+    884067.4,
+    4336093.0,
+    8060991.7
+   ],
+   "v0_over_v1": [
+    15708.333333333334,
+    111887.99999999999,
+    736722.8333333334,
+    3613410.8333333335,
+    6200762.846153846
+   ]
+  },
+  "get_hit_p99_us": {
+   "v1_us": [
+    0.8,
+    1.0,
+    1.6,
+    1.6,
+    1.7
+   ],
+   "v0_us": [
+    10364.3,
+    92623.4,
+    900482.9,
+    4410328.1,
+    8200102.5
+   ],
+   "v0_over_v1": [
+    12955.374999999998,
+    92623.4,
+    562801.8125,
+    2756455.0624999995,
+    4823589.705882353
+   ]
+  },
+  "get_hit_p50_v1_fit": {
+   "values": [
+    0.4,
+    0.5,
+    0.7,
+    0.7,
+    0.8
+   ],
+   "loglog_slope_vs_file_bytes": 0.09821468268946648,
+   "loglog_r2": 0.9591775788120598,
+   "linear_intercept": 0.5214838723259088,
+   "linear_per_record": 3.057607935260435e-08,
+   "linear_r2": 0.641474820343805,
+   "ratio_largest_over_smallest": 2.0,
+   "records_ratio": 1000.0
+  },
+  "get_miss_p50_us": {
+   "v1_us": [
+    0.4,
+    0.4,
+    0.5,
+    0.5,
+    0.6
+   ],
+   "v0_us": [
+    7941.2,
+    81481.4,
+    825678.0,
+    4051031.1,
+    7901652.0
+   ],
+   "v0_over_v1": [
+    19853.0,
+    203703.49999999997,
+    1651356.0,
+    8102062.2,
+    13169420.0
+   ]
+  },
+  "get_miss_p95_us": {
+   "v1_us": [
+    0.6,
+    0.6,
+    0.7,
+    0.8,
+    0.8
+   ],
+   "v0_us": [
+    9489.7,
+    90382.8,
+    886512.8,
+    4238862.4,
+    8181309.4
+   ],
+   "v0_over_v1": [
+    15816.166666666668,
+    150638.0,
+    1266446.8571428573,
+    5298578.0,
+    10226636.75
+   ]
+  },
+  "get_miss_p99_us": {
+   "v1_us": [
+    0.8,
+    0.7,
+    0.9,
+    1.0,
+    1.0
+   ],
+   "v0_us": [
+    11009.3,
+    92665.2,
+    917133.5,
+    4313507.3,
+    8376783.2
+   ],
+   "v0_over_v1": [
+    13761.624999999998,
+    132378.85714285716,
+    1019037.2222222222,
+    4313507.3,
+    8376783.2
+   ]
+  },
+  "get_miss_p50_v1_fit": {
+   "values": [
+    0.4,
+    0.4,
+    0.5,
+    0.5,
+    0.6
+   ],
+   "loglog_slope_vs_file_bytes": 0.05529760987514047,
+   "loglog_r2": 0.8386280847632139,
+   "linear_intercept": 0.4229895195488267,
+   "linear_per_record": 1.7694128010916594e-08,
+   "linear_r2": 0.8285907374254944,
+   "ratio_largest_over_smallest": 1.4999999999999998,
+   "records_ratio": 1000.0
+  },
+  "get_hit_p50_v0_fit": {
+   "values": [
+    7816.1,
+    80706.5,
+    812992.4,
+    4100732.3,
+    7841656.8
+   ],
+   "loglog_slope_vs_file_bytes": 1.0025994183451101,
+   "loglog_r2": 0.9999491410332249,
+   "linear_intercept": 31383.48291798681,
+   "linear_per_record": 0.7875224509875893,
+   "linear_r2": 0.9994897373978724,
+   "ratio_largest_over_smallest": 1003.2697636928903,
+   "records_ratio": 1000.0
+  },
+  "get_hit_vs_controls_p50_us": {
+   "store_get": [
+    0.4,
+    0.5,
+    0.7,
+    0.7,
+    0.8
+   ],
+   "dict_get_control": [
+    0.1,
+    0.2,
+    0.4,
+    0.4,
+    0.5
+   ],
+   "noop_control": [
+    0.1,
+    0.1,
+    0.1,
+    0.1,
+    0.1
+   ]
+  },
+  "get_hit_p50_between_run_spread": [
+   0.24999999999999994,
+   0.0,
+   0.2857142857142858,
+   0.0,
+   0.0
+  ],
+  "get_hit_p99_between_run_spread": [
+   0.2857142857142858,
+   0.10000000000000009,
+   0.35714285714285715,
+   0.06250000000000006,
+   0.05882352941176463
+  ],
+  "get_samples_per_kind_pooled": [
+   500000,
+   500000,
+   500000,
+   300000,
+   300000
+  ],
+  "open_recovery": {
+   "v1_seconds": [
+    0.0198233,
+    0.1050798,
+    1.0609354,
+    5.3530633,
+    11.0220331
+   ],
+   "v0_seconds": [
+    0.015649,
+    0.0926246,
+    0.7884846,
+    3.8365404,
+    7.8114976
+   ],
+   "v1_over_v0": [
+    1.2667454789443415,
+    1.1344696765222197,
+    1.3455372495543985,
+    1.3952839646886033,
+    1.4110012784232309
+   ],
+   "v1_us_per_record": [
+    1.98233,
+    1.0507980000000001,
+    1.0609354,
+    1.0706126599999999,
+    1.10220331
+   ],
+   "v0_us_per_record": [
+    1.5649,
+    0.926246,
+    0.7884846,
+    0.76730808,
+    0.7811497599999999
+   ],
+   "v1_fit_seconds": {
+    "values": [
+     0.0198233,
+     0.1050798,
+     1.0609354,
+     5.3530633,
+     11.0220331
+    ],
+    "loglog_slope_vs_file_bytes": 0.927710972040894,
+    "loglog_r2": 0.9952419139543648,
+    "linear_intercept": -0.030356831854881694,
+    "linear_per_record": 1.0994859751256616e-06,
+    "linear_r2": 0.9997928553777664,
+    "ratio_largest_over_smallest": 556.0140390348731,
+    "records_ratio": 1000.0
+   },
+   "v1_between_run_spread": [
+    0.1491779875197369,
+    0.07256770568653542,
+    0.16810787914136907,
+    0.027024096651351078,
+    0.029131549242035887
+   ]
+  },
+  "put_load_p50_us": {
+   "v1": [
+    4.7,
+    4.4,
+    4.6,
+    4.5,
+    4.6
+   ],
+   "v0": [
+    4.7,
+    4.3,
+    4.1,
+    4.1,
+    4.1
+   ],
+   "v1_over_v0": [
+    1.0,
+    1.0232558139534884,
+    1.1219512195121952,
+    1.0975609756097562,
+    1.1219512195121952
+   ]
+  },
+  "put_overwrite_p50_us": {
+   "v1": [
+    4.9,
+    4.6,
+    4.7,
+    4.7,
+    4.8
+   ],
+   "v0": [
+    4.2,
+    4.2,
+    4.5,
+    4.0,
+    4.3
+   ],
+   "v1_over_v0": [
+    1.1666666666666667,
+    1.0952380952380951,
+    1.0444444444444445,
+    1.175,
+    1.1162790697674418
+   ]
+  },
+  "put_load_throughput_ops_per_s": {
+   "v1": [
+    194313.98419450055,
+    195596.994300108,
+    192293.51435896053,
+    194561.08381419105,
+    192682.54990930366
+   ],
+   "v0": [
+    203513.04213330513,
+    210558.7640032106,
+    214416.48536859427,
+    215767.50471384032,
+    216573.59308217163
+   ]
+  },
+  "delete_p50_us": {
+   "v1": [
+    4.6,
+    4.5,
+    5.0,
+    4.8,
+    4.7
+   ],
+   "v0": [
+    4.2,
+    3.9,
+    4.1,
+    4.2,
+    3.7
+   ],
+   "v1_over_v0": [
+    1.0952380952380951,
+    1.153846153846154,
+    1.2195121951219514,
+    1.1428571428571428,
+    1.2702702702702702
+   ]
+  },
+  "memory": [
+   {
+    "records": 10000,
+    "private_bytes_per_key_after_load": {
+     "median": 240.4352,
+     "min": 240.4352,
+     "max": 240.4352
+    },
+    "private_bytes_per_key_after_replay": {
+     "median": 267.8784,
+     "min": 240.8448,
+     "max": 269.1072
+    },
+    "private_delta_over_payload_after_load": 2.166082882882883
+   },
+   {
+    "records": 100000,
+    "private_bytes_per_key_after_load": {
+     "median": 247.52128,
+     "min": 246.45632,
+     "max": 251.6992
+    },
+    "private_bytes_per_key_after_replay": {
+     "median": 247.68512,
+     "min": 246.86592,
+     "max": 264.56064
+    },
+    "private_delta_over_payload_after_load": 2.229921441441441
+   },
+   {
+    "records": 1000000,
+    "private_bytes_per_key_after_load": {
+     "median": 236.322816,
+     "min": 235.954176,
+     "max": 236.40064
+    },
+    "private_bytes_per_key_after_replay": {
+     "median": 236.040192,
+     "min": 235.880448,
+     "max": 236.99456
+    },
+    "private_delta_over_payload_after_load": 2.1290343783783783
+   },
+   {
+    "records": 5000000,
+    "private_bytes_per_key_after_load": {
+     "median": 227.1485952,
+     "min": 227.1461376,
+     "max": 227.1485952
+    },
+    "private_bytes_per_key_after_replay": {
+     "median": 227.1469568,
+     "min": 227.0388224,
+     "max": 227.1494144
+    },
+    "private_delta_over_payload_after_load": 2.0463837405405405
+   },
+   {
+    "records": 10000000,
+    "private_bytes_per_key_after_load": {
+     "median": 227.2526336,
+     "min": 227.2509952,
+     "max": 227.2530432
+    },
+    "private_bytes_per_key_after_replay": {
+     "median": 227.3112064,
+     "min": 227.2526336,
+     "max": 227.3415168
+    },
+    "private_delta_over_payload_after_load": 2.0473210234234234
+   }
+  ]
+ },
+ "baseline_analysis": {
+  "same_workload_as_v0": {
+   "put_load": {
+    "p50_us": {
+     "v1_median": 4.2,
+     "v0_median": 4.0,
+     "v0_over_v1": 0.9523809523809523
+    },
+    "p95_us": {
+     "v1_median": 5.3,
+     "v0_median": 9.6,
+     "v0_over_v1": 1.8113207547169812
+    },
+    "p99_us": {
+     "v1_median": 7.9,
+     "v0_median": 13.1,
+     "v0_over_v1": 1.6582278481012658
+    }
+   },
+   "get_hit": {
+    "p50_us": {
+     "v1_median": 0.5,
+     "v0_median": 8672.1,
+     "v0_over_v1": 17344.2
+    },
+    "p95_us": {
+     "v1_median": 0.7,
+     "v0_median": 13520.6,
+     "v0_over_v1": 19315.14285714286
+    },
+    "p99_us": {
+     "v1_median": 3.4,
+     "v0_median": 21358.4,
+     "v0_over_v1": 6281.8823529411775
+    }
+   },
+   "get_miss": {
+    "p50_us": {
+     "v1_median": 0.3,
+     "v0_median": 8781.1,
+     "v0_over_v1": 29270.333333333336
+    },
+    "p95_us": {
+     "v1_median": 0.6,
+     "v0_median": 12930.7,
+     "v0_over_v1": 21551.166666666668
+    },
+    "p99_us": {
+     "v1_median": 0.7,
+     "v0_median": 14119.7,
+     "v0_over_v1": 20171.000000000004
+    }
+   },
+   "mixed_all": {
+    "p50_us": {
+     "v1_median": 0.5,
+     "v0_median": 8143.5,
+     "v0_over_v1": 16287.0
+    },
+    "p95_us": {
+     "v1_median": 4.6,
+     "v0_median": 22175.2,
+     "v0_over_v1": 4820.695652173914
+    },
+    "p99_us": {
+     "v1_median": 8.8,
+     "v0_median": 26209.8,
+     "v0_over_v1": 2978.3863636363635
+    }
+   },
+   "mixed_get": {
+    "p50_us": {
+     "v1_median": 0.5,
+     "v0_median": 10515.4,
+     "v0_over_v1": 21030.8
+    },
+    "p95_us": {
+     "v1_median": 0.6,
+     "v0_median": 23086.2,
+     "v0_over_v1": 38477.0
+    },
+    "p99_us": {
+     "v1_median": 0.8,
+     "v0_median": 26209.8,
+     "v0_over_v1": 32762.249999999996
+    }
+   },
+   "mixed_put": {
+    "p50_us": {
+     "v1_median": 4.4,
+     "v0_median": 15.2,
+     "v0_over_v1": 3.454545454545454
+    },
+    "p95_us": {
+     "v1_median": 6.8,
+     "v0_median": 38.4,
+     "v0_over_v1": 5.647058823529412
+    },
+    "p99_us": {
+     "v1_median": 28.5,
+     "v0_median": 46.6,
+     "v0_over_v1": 1.6350877192982456
+    }
+   },
+   "mixed_delete": {
+    "p50_us": {
+     "v1_median": 4.4,
+     "v0_median": 15.5,
+     "v0_over_v1": 3.5227272727272725
+    },
+    "p95_us": {
+     "v1_median": 16.8,
+     "v0_median": 30.8,
+     "v0_over_v1": 1.8333333333333333
+    },
+    "p99_us": {
+     "v1_median": 16.8,
+     "v0_median": 30.8,
+     "v0_over_v1": 1.8333333333333333
+    }
+   },
+   "put_sync": {
+    "p50_us": {
+     "v1_median": 1898.5,
+     "v0_median": 2249.3,
+     "v0_over_v1": 1.184777455886226
+    },
+    "p95_us": {
+     "v1_median": 2254.4,
+     "v0_median": 2697.4,
+     "v0_over_v1": 1.1965046132008517
+    },
+    "p99_us": {
+     "v1_median": 3873.4,
+     "v0_median": 4148.9,
+     "v0_over_v1": 1.0711261424071874
+    }
+   }
+  },
+  "extended_v1_only": {
+   "put_load": {
+    "p50_us": {
+     "v1_median": 4.7,
+     "v0_median": 4.0,
+     "v0_over_v1": 0.851063829787234
+    },
+    "p95_us": {
+     "v1_median": 5.8,
+     "v0_median": 9.6,
+     "v0_over_v1": 1.6551724137931034
+    },
+    "p99_us": {
+     "v1_median": 10.5,
+     "v0_median": 13.1,
+     "v0_over_v1": 1.2476190476190476
+    }
+   },
+   "get_hit": {
+    "p50_us": {
+     "v1_median": 0.4,
+     "v0_median": 8672.1,
+     "v0_over_v1": 21680.25
+    },
+    "p95_us": {
+     "v1_median": 0.5,
+     "v0_median": 13520.6,
+     "v0_over_v1": 27041.2
+    },
+    "p99_us": {
+     "v1_median": 0.7,
+     "v0_median": 21358.4,
+     "v0_over_v1": 30512.000000000004
+    }
+   },
+   "get_miss": {
+    "p50_us": {
+     "v1_median": 0.3,
+     "v0_median": 8781.1,
+     "v0_over_v1": 29270.333333333336
+    },
+    "p95_us": {
+     "v1_median": 0.4,
+     "v0_median": 12930.7,
+     "v0_over_v1": 32326.75
+    },
+    "p99_us": {
+     "v1_median": 0.5,
+     "v0_median": 14119.7,
+     "v0_over_v1": 28239.4
+    }
+   },
+   "mixed_all": {
+    "p50_us": {
+     "v1_median": 0.5,
+     "v0_median": 8143.5,
+     "v0_over_v1": 16287.0
+    },
+    "p95_us": {
+     "v1_median": 5.0,
+     "v0_median": 22175.2,
+     "v0_over_v1": 4435.04
+    },
+    "p99_us": {
+     "v1_median": 5.9,
+     "v0_median": 26209.8,
+     "v0_over_v1": 4442.338983050847
+    }
+   },
+   "mixed_get": {
+    "p50_us": {
+     "v1_median": 0.4,
+     "v0_median": 10515.4,
+     "v0_over_v1": 26288.499999999996
+    },
+    "p95_us": {
+     "v1_median": 0.6,
+     "v0_median": 23086.2,
+     "v0_over_v1": 38477.0
+    },
+    "p99_us": {
+     "v1_median": 0.8,
+     "v0_median": 26209.8,
+     "v0_over_v1": 32762.249999999996
+    }
+   },
+   "mixed_put": {
+    "p50_us": {
+     "v1_median": 4.5,
+     "v0_median": 15.2,
+     "v0_over_v1": 3.3777777777777778
+    },
+    "p95_us": {
+     "v1_median": 5.5,
+     "v0_median": 38.4,
+     "v0_over_v1": 6.9818181818181815
+    },
+    "p99_us": {
+     "v1_median": 10.1,
+     "v0_median": 46.6,
+     "v0_over_v1": 4.613861386138614
+    }
+   },
+   "mixed_delete": {
+    "p50_us": {
+     "v1_median": 4.4,
+     "v0_median": 15.5,
+     "v0_over_v1": 3.5227272727272725
+    },
+    "p95_us": {
+     "v1_median": 5.2,
+     "v0_median": 30.8,
+     "v0_over_v1": 5.923076923076923
+    },
+    "p99_us": {
+     "v1_median": 9.1,
+     "v0_median": 30.8,
+     "v0_over_v1": 3.384615384615385
+    }
+   },
+   "put_sync": {
+    "p50_us": {
+     "v1_median": 1883.5,
+     "v0_median": 2249.3,
+     "v0_over_v1": 1.1942129015131406
+    },
+    "p95_us": {
+     "v1_median": 2177.3,
+     "v0_median": 2697.4,
+     "v0_over_v1": 1.2388738345657464
+    },
+    "p99_us": {
+     "v1_median": 3962.2,
+     "v0_median": 4148.9,
+     "v0_over_v1": 1.0471202867094038
+    }
+   }
+  }
+ }
+}

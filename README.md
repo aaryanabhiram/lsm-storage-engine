@@ -22,7 +22,7 @@ The project covers on-disk record formats, durability and fsync semantics, crash
 
 The API, record format, invariants, durability policy and known limitations are specified in [docs/v0-design.md](docs/v0-design.md).
 
-**V1 is implemented** as `KVStore`, a transitional step: a write-ahead log (same record format as V0) plus an in-memory memtable. Mutations are appended to the WAL before the memtable is updated, `get` is a dictionary lookup that never reads the file, and opening replays the WAL and truncates a torn tail. See [docs/v1-design.md](docs/v1-design.md). V1 has not been benchmarked yet.
+**V1 is implemented** as `KVStore`, a transitional step: a write-ahead log (same record format as V0) plus an in-memory memtable. Mutations are appended to the WAL before the memtable is updated, `get` is a dictionary lookup that never reads the file, and opening replays the WAL and truncates a torn tail. See [docs/v1-design.md](docs/v1-design.md). V1's measured behavior against V0 (GET scaling, open/replay time, write latency, memory, WAL growth) is in [docs/benchmarks.md](docs/benchmarks.md#v1-benchmark).
 
 ## Architecture roadmap
 
@@ -31,7 +31,7 @@ Versions so far. Each step gets benchmarked against the one before it.
 | version | change | status |
 |---|---|---|
 | V0 | append-only persistent baseline | implemented |
-| V1 | write-ahead log + memtable | implemented (not yet benchmarked) |
+| V1 | write-ahead log + memtable | implemented, benchmarked |
 
 ## Performance methodology
 
