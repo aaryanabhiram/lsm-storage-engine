@@ -24,6 +24,8 @@ The API, record format, invariants, durability policy and known limitations are 
 
 **V1 is implemented** as `KVStore`, a transitional step: a write-ahead log (same record format as V0) plus an in-memory memtable. Mutations are appended to the WAL before the memtable is updated, `get` is a dictionary lookup that never reads the file, and opening replays the WAL and truncates a torn tail. See [docs/v1-design.md](docs/v1-design.md). V1's measured behavior against V0 (GET scaling, open/replay time, write latency, memory, WAL growth) is in [docs/benchmarks.md](docs/benchmarks.md#v1-benchmark).
 
+**V2 is implemented** as `KVStore`, which adds immutable sorted SSTables. When the memtable reaches a size limit it's written to a checksummed SSTable (reusing the V0/V1 record format plus a footer), the WAL moves to a fresh segment, and the covered segments are deleted. `get` checks the memtable, then SSTables newest to oldest, and a table is found by a sequential scan. The store is a directory, not a single file. See [docs/v2-design.md](docs/v2-design.md) for the format, flush protocol, invariants and crash behavior. V2 has not been benchmarked yet.
+
 ## Architecture roadmap
 
 Versions so far. Each step gets benchmarked against the one before it.
@@ -32,6 +34,7 @@ Versions so far. Each step gets benchmarked against the one before it.
 |---|---|---|
 | V0 | append-only persistent baseline | implemented |
 | V1 | write-ahead log + memtable | implemented, benchmarked |
+| V2 | SSTables | implemented (not yet benchmarked) |
 
 ## Performance methodology
 
@@ -66,7 +69,7 @@ pytest                                # run the tests
 
 ## Repository layout
 
-- `src/lsm_store/`: the storage engine (`record.py`: record format; `wal.py`: write-ahead log; `store.py`: `KVStore`)
+- `src/lsm_store/`: the storage engine (`record.py`: record format; `wal.py`: write-ahead log; `sstable.py`: SSTable format; `fsutil.py`: directory fsync helper; `store.py`: `KVStore`)
 - `tests/`: correctness tests
 - `benchmarks/`: benchmark scripts and result JSON
 - `docs/`: design and benchmark documentation
