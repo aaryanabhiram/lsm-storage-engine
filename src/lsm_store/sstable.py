@@ -58,10 +58,7 @@ class _Bounded:
         self._pos = 0
 
     def read(self, n):
-        left = self._limit - self._pos
-        if n >= left:
-            n = max(left - 1, 0)  # stay inside the data region
-        data = self._f.read(n)
+        data = self._f.read(min(n, self._limit - self._pos))
         self._pos += len(data)
         return data
 
