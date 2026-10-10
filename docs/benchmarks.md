@@ -1,6 +1,6 @@
 # Benchmarks
 
-There are two benchmarks: the original **~1.24 MB baseline** (the V0 benchmark, below) and the **scaling characterization** (the V0 scaling benchmark, further down; 10,000 to 10,000,000 records). They use different workloads, so don't compare their numbers directly. The V1 benchmark is described in [V1 benchmark](#v1-benchmark).
+There are two benchmarks: the original **~1.24 MB baseline** (the V0 benchmark, below) and the **scaling characterization** (the V0 scaling benchmark, further down; 10,000 to 10,000,000 records). They use different workloads, so don't compare their numbers directly. The V1 benchmark is described in [V1 benchmark](#v1-benchmark). The V2 benchmark is described in [V2 benchmark](#v2-benchmark).
 
 The baseline JSON file holds the metadata, per-run summaries, aggregates and the raw per-operation latencies (in ns) of every run.
 
@@ -223,7 +223,7 @@ Purpose: measure what moving GET from a full-file scan (V0) to a memtable lookup
 
 The sample counts and protocol were fixed before the final run. Each scale was run as its own fresh Python process, one after another, and every completed run is reported. GET, overwrite and delete percentiles are pooled over all runs at a scale (as for V0); `put_load` percentiles are the per-run median.
 
-Per run at N records (`bench.py`):
+Per run at N records (the V1 benchmark):
 
 1. **`put_load`**: N PUTs of distinct keys. Afterwards the memtable is checked to hold N entries and the WAL to be exactly N × 124 bytes.
 2. **`open_recovery`**: close the store, then time `KVStore(path)` (replay of the whole WAL). The rebuilt memtable is checked untimed against a fingerprint of the live one, and no truncation may occur.
@@ -235,7 +235,7 @@ Per run at N records (`bench.py`):
 
 **Memory probes** (untimed, separate from the latency runs): per scale, 3 probes, each a pair of fresh Python processes. One loads N keys with `sync=False` and the other opens that WAL. Process *private bytes* (Windows `PrivateUsage`) are read before and after, and the tables report the delta. These are observations for this Python build and this key/value shape, not a universal memory cost.
 
-**10,000-key head-to-head** (`--baseline`): V1 runs the exact V0 baseline workload (`build_workload` in `bench.py`: 10,000 keys, 100 + 100 GETs, 300 mixed ops with 70% GET / 25% PUT overwrite / 5% DELETE, 300 `sync=True` PUTs, 5 runs). Separately, it runs an extended V1-only workload with the same definitions but 100,000 + 100,000 GETs and 100,000 mixed ops (5 runs). Every GET result is checked against a reference dict.
+**10,000-key head-to-head** (`--baseline`): V1 runs the exact V0 baseline workload (`build_workload` in the V1 benchmark: 10,000 keys, 100 + 100 GETs, 300 mixed ops with 70% GET / 25% PUT overwrite / 5% DELETE, 300 `sync=True` PUTs, 5 runs). Separately, it runs an extended V1-only workload with the same definitions but 100,000 + 100,000 GETs and 100,000 mixed ops (5 runs). Every GET result is checked against a reference dict.
 
 **V0 reference numbers** come from `v0_scaling.json` and `v0_baseline.json` as recorded. Apart from the V0 delete runs, they were measured in earlier invocations than the V1 runs, so don't read differences of a few percent between V1 and those V0 figures as real.
 
@@ -342,7 +342,7 @@ Delta in private bytes of a fresh process from before the load to after loading 
 
 ### Structural metrics
 
-Derived (not timed) by `benchmarks/structural.py` from the record format and the workload (N loaded keys, then 1,000 overwrites, then 1,000 deletes), and cross-checked against the measured WAL sizes, memtable entry counts, tombstone counts and replay record counts in the result file. Definitions: *physical records* = every WAL record; *stale records* = physical records − distinct keys (superseded records still in the WAL); *live keys* = distinct keys not tombstoned; *memtable entries* = distinct keys, tombstoned ones included; *space amplification* = WAL bytes / live user bytes (111 × live keys). This is append-only staleness, not LSM write amplification: V1 never rewrites data.
+Derived (not timed) by the V1 structural analysis from the record format and the workload (N loaded keys, then 1,000 overwrites, then 1,000 deletes), and cross-checked against the measured WAL sizes, memtable entry counts, tombstone counts and replay record counts in the result file. Definitions: *physical records* = every WAL record; *stale records* = physical records − distinct keys (superseded records still in the WAL); *live keys* = distinct keys not tombstoned; *memtable entries* = distinct keys, tombstoned ones included; *space amplification* = WAL bytes / live user bytes (111 × live keys). This is append-only staleness, not LSM write amplification: V1 never rewrites data.
 
 | scale | WAL bytes after load | physical records final | WAL bytes final | stale records | live keys | tombstoned keys | memtable entries | memtable payload lower bound after load (bytes) | space amplification final |
 |---|---|---|---|---|---|---|---|---|---|
@@ -385,3 +385,240 @@ Everything below refers to the measurements above.
 ## Environment
 
 **Environment:** Python 3.10.6 (MSC v.1932, 64-bit); Windows 11 (`Windows-10-10.0.26300-SP0`); Intel Core i7-14650HX (`Intel64 Family 6 Model 183`), 24 logical CPUs; 15.8 GB RAM; seed 42; key 11 B; value 100 B; `sync=False` for the scaling runs.
+
+---
+
+# V2 benchmark
+
+Purpose: characterize the V2 store **as implemented** ([v2-design.md](v2-design.md)): WAL segments + memtable + immutable SSTables, with a **synchronous flush** inside the write that finds the memtable at its limit. V0's and V1's results above are the references and aren't modified. **All numbers are warm OS-cache numbers.** Every figure in this section comes from `benchmarks/results/v2_benchmark.json` or `v2_structural.json`.
+
+## Methodology
+
+**Same as V0/V1:** seed 42, key 11 B, value 100 B, 124-byte PUT records, `sync=False` for the scaling runs, a fresh database in a temp directory for every run, and only the store call timed (a `perf_counter_ns` pair per op). Correctness checks, bookkeeping, close and cleanup aren't timed. Percentiles are nearest-rank using the V0 code, with V0's scale ladder and run counts (5 / 5 / 5 / 3 / 3), and each scale runs as its own fresh Python process, one after another. The hit keys, overwrite keys and values, and delete keys are generated exactly as for V1 (`workload` in `bench.py`).
+
+**Configuration:** the store's default flush threshold, `memtable_limit_bytes` = 4 MiB (4,194,304 bytes of key + value payload; 111 bytes per entry here, so a flush every 37,787 entries and tables of 4,685,616 bytes). Nothing was tuned. At 10,000 records the whole database (1,110,000 payload bytes) never reaches the limit, so **S1 never flushes**.
+
+**GET sample counts** differ from V1 because V2 GET cost depends on the data layout. They were fixed before the final run:
+
+| scale | hits per run | misses per run | pooled hit / miss samples |
+|---|---|---|---|
+| S1 (10,000) | 100,000 | 100,000 | 500,000 / 500,000 |
+| S2 (100,000) | 5,000 | 200 | 25,000 / 1,000 |
+| S3 (1,000,000) | 2,000 | 100 | 10,000 / 500 |
+| S4 (5,000,000) | 1,000 | 50 | 3,000 / 150 |
+| S5 (10,000,000) | 1,000 | 50 | 3,000 / 150 |
+
+Misses use V0's per-kind counts from S2 up (a miss in V2 scans every table to its end, like V0's full-file scan, so it costs about as much). S1 has no tables and uses V1's count. Hits are cheaper and get larger counts. Pooled p99 of misses at S4 and S5 rests on 150 samples and is approximate. In this workload keys are loaded in ascending order, so each table covers a contiguous key range, and the hit and miss costs below depend on that (see Limitations). Miss keys (`key_of(N + i)`) are larger than every stored key, as in V0 and V1.
+
+**Flush instrumentation (no production code changed).** The benchmark wraps the store instance's `flush` (which the store calls from `_flush_if_full`) and the module-level `write_sstable`. Before each write it reads the memtable byte count outside the timed region, and if the write will flush, it snapshots the directory first. After the write it checks that the probe saw a flush exactly when the rule predicted one (an assertion that never fired). A **flush-triggering write** is a PUT or DELETE that finds the memtable at its limit and flushes before applying itself, so its latency includes the whole flush. For every flush the result keeps one record: operation index, operation latency, flush duration, time inside `write_sstable` (build + fsync + rename), memtable entries and bytes, table records and bytes, and WAL files and bytes before and after. Percentiles of all, non-flush and flush-triggering writes are computed in-process. Raw per-operation latencies are not stored, except those of flush-triggering writes. The wrappers add two timer pairs, only inside operations that flush.
+
+**Other V2 measurements:**
+- *Read work:* per run, 200 hit and 3 miss GETs are repeated untimed with `SSTable.lookup` and the record reader wrapped, counting tables consulted, records examined and bytes scanned. This is application-level work, not physical I/O.
+- *Open breakdown:* after the timed open, the steps of the open are repeated with the module's own functions (directory listing, `SSTable` footer validation for every table, WAL replay) to split the time. It's a separate warm repetition, not instrumentation of the timed open.
+- *Memory:* 3 untimed probes per scale, each a pair of fresh processes (load N keys; open that database), reading process private bytes before and after, as for V1. The V2 probe uses the same procedure and the same key/value stream, so V1 and V2 deltas are comparable.
+- *Correctness:* every GET result is checked. The table layout, WAL sizes and flush counts are asserted after the load, and overwrites and deletes are verified live and after the final reopen (all overwritten and deleted keys plus 200 sampled hit keys).
+
+**10,000-key head-to-head** (`--baseline`): V0's baseline workload and V1's extended workload (see the V1 section) on V2 with the default limit, and V0's baseline workload with a 16 KiB limit (`SMALL_LIMIT_BYTES`). The small limit spreads the 10,000 keys over many tables, so the mixed workload and `sync=True` PUTs run against SSTables. 5 runs each, and every GET is checked against a reference dict.
+
+**References:** V1 values come from `v1_benchmark.json` and V0 values from `v0_scaling.json` / `v0_baseline.json`, read-only. They were measured in earlier invocations, so small differences from them aren't meaningful.
+
+**Timing floor:** as for V1, `perf_counter` ticks every 100 ns. V2 operations that reach a table take milliseconds, but memtable operations are a few ticks.
+
+## Results
+
+### Flush behavior (the `put_load` phase)
+
+Load of N distinct keys, `sync=False`. Flush-triggering writes are pooled over runs, and non-flush percentiles are the median over runs of each run's value. Durations in the second block are the in-store flush time measured by the wrapper.
+
+| scale | flushes per run | flush-triggering writes (pooled) | trigger p50 / p95 / p99 / max (ms) | non-flush p50 / p95 / p99 (µs) | trigger p50 / non-flush p50 |
+|---|---|---|---|---|---|
+| S1 (10,000) | 0 | 0 | — | 4.6 / 5.8 / 11.2 | — |
+| S2 (100,000) | 2 | 10 | 59.0 / 64.1 / 64.1 / 64.1 | 4.8 / 6.1 / 14.0 | 12,283 |
+| S3 (1,000,000) | 26 | 130 | 50.5 / 82.1 / 122.4 / 175.2 | 4.8 / 6.2 / 11.4 | 10,518 |
+| S4 (5,000,000) | 132 | 396 | 53.2 / 65.1 / 104.3 / 118.0 | 4.8 / 6.1 / 10.3 | 11,081 |
+| S5 (10,000,000) | 264 | 792 | 55.8 / 64.5 / 111.7 / 138.2 | 4.8 / 6.0 / 10.1 | 11,630 |
+
+| scale | flush duration p50 / p95 / max (ms) | inside `write_sstable` (median share) | flush share of the triggering write (median) | spacing between flushes (ops) | amortized flush cost (µs per PUT) | non-flush writes at least as slow as the fastest flush-triggering write in the same run |
+|---|---|---|---|---|---|---|
+| S2 (100,000) | 58.6 / 64.1 / 64.1 | 70% | 99.9% | 37,787 (first at op 37,787) | 1.15 | 0 of 499,990 |
+| S3 (1,000,000) | 50.4 / 82.0 / 175.1 | 67% | 99.9% | 37,787 (first at op 37,787) | 1.36 | 2 of 4,999,870 |
+| S4 (5,000,000) | 53.1 / 65.0 / 117.9 | 68% | 99.9% | 37,787 (first at op 37,787) | 1.46 | 0 of 14,999,604 |
+| S5 (10,000,000) | 55.7 / 64.5 / 138.2 | 69% | 99.9% | 37,787 (first at op 37,787) | 1.48 | 0 of 29,999,208 |
+
+Per-flush time split: the median flush takes 50.4 ms at S3, 53.1 ms at S4 and 55.7 ms at S5. Of that, `write_sstable` (write, fsync, rename) is 33.4, 37.1 and 38.9 ms, and the remainder (16.7, 17.0 and 17.0 ms) is everything else in `flush`: sorting the memtable, opening the new table, creating the new WAL segment, closing and fsyncing the old one, and deleting it. The remainder wasn't broken down further. With the 16 KiB limit (tables of 18,380 bytes) the median flush is 14.3 ms, of which 11.7 ms is outside `write_sstable`.
+
+### Write latency, V2 vs V1 (`put_load`, all writes including flush-triggering ones)
+
+| scale | V2 p50 / p95 / p99 (µs) | V1 p50 / p95 / p99 (µs) | V2 ops/s | V1 ops/s | V2 / V1 | V2 slowest write (ms) | V1 slowest write (ms) |
+|---|---|---|---|---|---|---|---|
+| S1 (10,000) | 4.6 / 5.8 / 11.2 | 4.7 / 5.6 / 15.2 | 190,458 | 194,314 | 0.98 | 1.3 | 0.4 |
+| S2 (100,000) | 4.8 / 6.1 / 14.1 | 4.4 / 5.7 / 13.8 | 155,797 | 195,597 | 0.80 | 59.0 | 1.8 |
+| S3 (1,000,000) | 4.8 / 6.2 / 11.4 | 4.6 / 6.0 / 12.7 | 150,075 | 192,294 | 0.78 | 122.4 | 15.5 |
+| S4 (5,000,000) | 4.8 / 6.1 / 10.3 | 4.5 / 5.9 / 14.1 | 149,882 | 194,561 | 0.77 | 104.5 | 76.6 |
+| S5 (10,000,000) | 4.8 / 6.0 / 10.1 | 4.6 / 6.1 / 11.6 | 149,106 | 192,683 | 0.77 | 131.7 | 172.5 |
+
+(Slowest write: median over runs of each run's maximum.)
+
+**Overwrite and delete** (1,000 each per run, µs, p50 / p95 / p99, pooled over runs). No overwrite or delete triggered a flush in any run at any scale. The memtable held between 12,116 and 24,426 entries after the load, and the 2,000 extra writes stayed under the limit. So the overwrite and delete phases contain no flush-triggering writes, and **a DELETE that triggers a flush was never observed in the scaling runs**.
+
+| scale | V2 overwrite | V1 overwrite | V2 delete | V1 delete |
+|---|---|---|---|---|
+| S1 (10,000) | 5.0 / 6.0 / 15.5 | 4.9 / 5.9 / 16.1 | 5.0 / 5.7 / 9.3 | 4.6 / 5.4 / 7.6 |
+| S2 (100,000) | 5.6 / 7.0 / 19.0 | 4.6 / 8.1 / 27.2 | 5.1 / 5.9 / 7.8 | 4.5 / 5.9 / 9.4 |
+| S3 (1,000,000) | 5.6 / 7.3 / 20.5 | 4.7 / 6.2 / 12.2 | 5.0 / 5.9 / 8.2 | 5.0 / 6.1 / 10.9 |
+| S4 (5,000,000) | 5.1 / 6.1 / 16.0 | 4.7 / 6.5 / 24.1 | 4.5 / 5.3 / 8.3 | 4.8 / 5.7 / 7.6 |
+| S5 (10,000,000) | 5.0 / 7.8 / 23.3 | 4.8 / 6.0 / 22.7 | 4.7 / 5.8 / 9.8 | 4.7 / 6.1 / 16.0 |
+
+### GET
+
+V2 percentiles are pooled over all runs at the scale. µs unless noted.
+
+**GET hit**
+
+| scale | samples | V2 p50 | p95 | p99 | max | mean | V1 p50 | V0 p50 (ms) | V2 p50 / V0 p50 |
+|---|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) | 500,000 | 0.4 | 0.6 | 0.7 | 203 | 0.4 | 0.4 | 7.8 | 0.0001 |
+| S2 (100,000) | 25,000 | 17,902.2 | 48,398.7 | 53,719.7 | 72,867 | 19,917.7 | 0.5 | 80.7 | 0.22 |
+| S3 (1,000,000) | 10,000 | 24,978.3 | 48,292.8 | 52,936.1 | 64,091 | 25,098.4 | 0.7 | 813.0 | 0.0307 |
+| S4 (5,000,000) | 3,000 | 29,844.3 | 51,565.9 | 55,890.3 | 69,932 | 28,896.4 | 0.7 | 4,100.7 | 0.0073 |
+| S5 (10,000,000) | 3,000 | 29,664.4 | 54,513.8 | 60,100.8 | 64,514 | 30,377.5 | 0.8 | 7,841.7 | 0.0038 |
+
+**GET miss**
+
+| scale | samples | V2 p50 | p95 | p99 | max | mean | V1 p50 | V0 p50 (ms) | V2 p50 / V0 p50 |
+|---|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) | 500,000 | 0.4 | 0.5 | 0.6 | 156 | 0.4 | 0.4 | 7.9 | 0.0001 |
+| S2 (100,000) | 1,000 | 100,632.2 | 111,010.2 | 114,326.4 | 126,058 | 101,229.8 | 0.4 | 81.5 | 1.24 |
+| S3 (1,000,000) | 500 | 1,307,443.2 | 1,366,791.5 | 1,392,107.7 | 1,882,698 | 1,307,980.9 | 0.5 | 825.7 | 1.58 |
+| S4 (5,000,000) | 150 | 6,568,458.3 | 6,812,175.9 | 6,895,766.1 | 6,921,543 | 6,575,770.5 | 0.5 | 4,051.0 | 1.62 |
+| S5 (10,000,000) | 150 | 13,167,708.6 | 13,675,204.8 | 13,887,549.9 | 13,889,142 | 13,223,037.6 | 0.6 | 7,901.7 | 1.67 |
+
+Miss cost per stored record at the median: 1.01 µs (S2), 1.31 µs (S3), 1.31 µs (S4) and 1.32 µs (S5). V0's full-file scan cost 0.81, 0.83, 0.81 and 0.79 µs per record at the same scales.
+
+### Read work per GET (application-level, derived and measured)
+
+Derived by `structural.py` over the timed GET workload. The instrumented sample (200 hits and 3 misses per run) was **asserted equal to the derived values for every sampled GET in every run**. "Records examined" counts records the scan read and checksummed. V1 reads no WAL and no table records on a hit or a miss that the memtable answers.
+
+| scale | tables | hits answered by memtable / newest SSTable / older SSTable | tables consulted per hit (mean) | records examined per hit (mean) | bytes scanned per hit (mean, MB) | tables consulted per miss | records examined per miss | bytes scanned per miss (MB) |
+|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) | 0 | 100.0% / 0.0% / 0.0% | 0.0 | 0 | 0.00 | 0 | 0 | 0.0 |
+| S2 (100,000) | 2 | 23.8% / 38.0% / 38.1% | 1.1 | 14,558 | 1.81 | 2 | 75,574 | 9.4 |
+| S3 (1,000,000) | 26 | 2.1% / 3.5% / 94.5% | 13.1 | 18,550 | 2.30 | 26 | 982,462 | 121.8 |
+| S4 (5,000,000) | 132 | 0.2% / 1.1% / 98.7% | 67.3 | 19,674 | 2.44 | 132 | 4,987,884 | 618.5 |
+| S5 (10,000,000) | 264 | 0.3% / 0.4% / 99.3% | 135.2 | 19,038 | 2.36 | 264 | 9,975,768 | 1,237.0 |
+
+### Open / recovery
+
+`KVStore(path)` on the closed database after the load: footer validation of every table plus replay of the surviving WAL. The last column reopens after the overwrites and deletes. The component columns come from a separate warm repetition of the same steps (see Methodology) and don't add up to the timed total. The difference is the rest of the open (temporary-file cleanup, directory listings, opening the WAL, memtable accounting) plus first-open effects, which weren't separated.
+
+| scale | SSTables validated | WAL records replayed | V2 open per run (ms) | V2 median (ms) | listing / footers / WAL replay (ms, median) | V1 median (s) | V2 / V1 | V2 reopen after mutations (ms, median) |
+|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) | 0 | 10,000 | 21, 22, 19, 19, 21 | 21.3 | 0.06 / 0.00 / 9.1 | 0.020 | 1.0767 | 19.0 |
+| S2 (100,000) | 2 | 24,426 | 33, 38, 32, 33, 33 | 33.0 | 0.07 / 0.18 / 23.2 | 0.105 | 0.3141 | 39.2 |
+| S3 (1,000,000) | 26 | 17,538 | 26, 29, 31, 28, 29 | 29.0 | 0.14 / 1.86 / 14.9 | 1.061 | 0.0273 | 32.3 |
+| S4 (5,000,000) | 132 | 12,116 | 32, 33, 34 | 32.9 | 1.10 / 8.18 / 10.3 | 5.353 | 0.0062 | 37.2 |
+| S5 (10,000,000) | 264 | 24,232 | 74, 78, 79 | 78.1 | 0.60 / 16.92 / 21.2 | 11.022 | 0.0071 | 68.2 |
+
+### Memory (observed process private bytes)
+
+Delta in private bytes of a fresh process from before the load to after loading N keys, and separately after opening the resulting database (median and min–max over 3 probes). The memtable at the end of a load holds whatever was written since the last flush, which differs by scale (the entries column).
+
+| scale | SSTables | memtable entries at probe | V2 delta after load (MB) | V2 delta after open (MB) | V1 delta after load (MB) | V2 / V1 | peak working set after load (MB, max of probes) |
+|---|---|---|---|---|---|---|---|
+| S1 (10,000) | 0 | 10,000 | 1.7 (1.6–1.8) | 1.4 (1.4–1.6) | 2.4 | 0.704 | 24.0 |
+| S2 (100,000) | 2 | 24,426 | 7.4 (7.2–7.6) | 5.2 (4.9–5.3) | 24.8 | 0.297 | 33.0 |
+| S3 (1,000,000) | 26 | 17,538 | 8.6 (8.6–8.7) | 4.4 (2.7–5.0) | 236.3 | 0.036 | 33.4 |
+| S4 (5,000,000) | 132 | 12,116 | 11.1 (10.3–11.5) | 3.9 (3.8–4.1) | 1,135.7 | 0.010 | 34.6 |
+| S5 (10,000,000) | 264 | 24,232 | 11.5 (11.0–12.1) | 5.4 (4.3–5.4) | 2,272.5 | 0.005 | 34.5 |
+
+### Structural metrics
+
+Derived (not timed) by `benchmarks/structural.py` and **asserted equal to the measured values in every run**: the SSTable layout (count, records and bytes of every table), the flush sequence (operation index, memtable entries and bytes, table size, WAL bytes before the flush), the WAL sizes after each phase, the total WAL bytes appended, and the work of the instrumented GETs. Definitions: *space amplification* = (SSTable bytes + surviving WAL bytes) / live user payload (111 × live keys); *stale records* = physical records (in tables and the WAL) − distinct keys; *rewrite factor* = (WAL bytes appended + SSTable bytes written) / the bytes of one encoded record per mutation, i.e. how many times a record's bytes reach a file (tables are written once); *bytes per payload byte* = the same numerator over key + value bytes, which includes the 13-byte record header. The rewrite factor is the structural write-amplification measure for V2. The record-format overhead (124 / 111 = 1.117) is a separate factor. The measurement point is the end of the delete phase, before close.
+
+| scale | SSTables | table size (bytes) | SSTable bytes | SSTable records | footer bytes | surviving WAL bytes | WAL bytes before each flush | WAL segments after each flush | total persistent bytes | space amplification (V1) | stale records |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) | 0 | — | 0 | 0 | 0 | 1,388,000 | — | 1 (no flush) | 1,388,000 | 1.3834 (1.3834) | 2,000 |
+| S2 (100,000) | 2 | 4,685,616 | 9,371,232 | 75,574 | 56 | 3,176,824 | 4,685,588 | 1 | 12,548,056 | 1.1418 (1.1418) | 2,000 |
+| S3 (1,000,000) | 26 | 4,685,616 | 121,826,016 | 982,462 | 728 | 2,322,712 | 4,685,588 | 1 | 124,148,728 | 1.1196 (1.1196) | 2,000 |
+| S4 (5,000,000) | 132 | 4,685,616 | 618,501,312 | 4,987,884 | 3,696 | 1,650,384 | 4,685,588 | 1 | 620,151,696 | 1.1176 (1.1176) | 2,000 |
+| S5 (10,000,000) | 264 | 4,685,616 | 1,237,002,624 | 9,975,768 | 7,392 | 3,152,768 | 4,685,588 | 1 | 1,240,155,392 | 1.1174 (1.1174) | 2,000 |
+
+| scale | logical payload bytes | logical record bytes (= V1's WAL bytes) | WAL bytes appended | SSTable bytes written | bytes per payload byte | rewrite factor | records flushed / records written |
+|---|---|---|---|---|---|---|---|
+| S1 (10,000) | 1,232,000 | 1,388,000 | 1,388,000 | 0 | 1.1266 | 1.0000 | 0 / 12,000 |
+| S2 (100,000) | 11,222,000 | 12,548,000 | 12,548,000 | 9,371,232 | 1.9532 | 1.7468 | 75,574 / 102,000 |
+| S3 (1,000,000) | 111,122,000 | 124,148,000 | 124,148,000 | 121,826,016 | 2.2135 | 1.9813 | 982,462 / 1,002,000 |
+| S4 (5,000,000) | 555,122,000 | 620,148,000 | 620,148,000 | 618,501,312 | 2.2313 | 1.9973 | 4,987,884 / 5,002,000 |
+| S5 (10,000,000) | 1,110,122,000 | 1,240,148,000 | 1,240,148,000 | 1,237,002,624 | 2.2314 | 1.9975 | 9,975,768 / 10,002,000 |
+
+All load tables have identical size (every flush happens after exactly 37,787 entries), so the table-size distribution is a single value, and the overwrite and delete phases wrote no tables. The WAL is reclaimed at every flush: every flush record shows one WAL file before and after, and the WAL bytes before each flush are the bytes of exactly one table's worth of records.
+
+### 10,000-key head-to-head
+
+V2 with the default limit on V0's baseline workload and on V1's extended workload, compared with V1 on the same workloads (medians over 5 runs; µs). No flush occurs in these runs (the database is 1.24 MB), so they compare V2's memtable-only path with V1's.
+
+| phase | V2 p50 / p95 / p99 | V1 p50 / p95 / p99 | V2 p50 / V1 p50 |
+|---|---|---|---|
+| baseline workload: get_hit | 0.5 / 0.7 / 2.5 | 0.5 / 0.7 / 3.4 | 1.00 |
+| baseline workload: get_miss | 0.4 / 0.6 / 2.3 | 0.3 / 0.6 / 0.7 | 1.33 |
+| baseline workload: mixed_all | 0.5 / 5.4 / 7.1 | 0.5 / 4.6 / 8.8 | 1.00 |
+| baseline workload: mixed_get | 0.5 / 0.7 / 0.8 | 0.5 / 0.6 / 0.8 | 1.00 |
+| baseline workload: mixed_put | 5.0 / 6.9 / 24.6 | 4.4 / 6.8 / 28.5 | 1.14 |
+| baseline workload: mixed_delete | 5.1 / 14.5 / 14.5 | 4.4 / 16.8 / 16.8 | 1.16 |
+| baseline workload: put_load | 4.5 / 5.4 / 12.5 | 4.2 / 5.3 / 7.9 | 1.07 |
+| baseline workload: put_sync | 1914.4 / 2178.7 / 3775.4 | 1898.5 / 2254.4 / 3873.4 | 1.01 |
+| extended workload: get_hit | 0.4 / 0.5 / 0.6 | 0.4 / 0.5 / 0.7 | 1.00 |
+| extended workload: get_miss | 0.4 / 0.5 / 0.6 | 0.3 / 0.4 / 0.5 | 1.33 |
+| extended workload: mixed_all | 0.5 / 5.8 / 7.1 | 0.5 / 5.0 / 5.9 | 1.00 |
+| extended workload: mixed_get | 0.5 / 0.7 / 0.9 | 0.4 / 0.6 / 0.8 | 1.25 |
+| extended workload: mixed_put | 4.9 / 6.7 / 16.7 | 4.5 / 5.5 / 10.1 | 1.09 |
+| extended workload: mixed_delete | 4.8 / 6.4 / 12.0 | 4.4 / 5.2 / 9.1 | 1.09 |
+| extended workload: put_load | 4.5 / 5.5 / 13.7 | 4.7 / 5.8 / 10.5 | 0.96 |
+| extended workload: put_sync | 1906.5 / 2096.0 / 3899.1 | 1883.5 / 2177.3 / 3962.2 | 1.01 |
+
+**With a 16 KiB limit** (tables of 18,380 bytes; the 10,000 keys end up in 67 tables after the load; flushes per run: 67 during the load, 1 during the mixed PUTs, 0 during the mixed DELETEs, 2 during the 300 `sync=True` PUTs). V0's baseline workload; V1 values from the V1 baseline run; µs.
+
+| phase | V2 p50 / p95 / p99 | V1 p50 / p95 / p99 | note |
+|---|---|---|---|
+| put_load | 4.6 / 10.3 / 89.7 | 4.2 / 5.3 / 7.9 | flush-triggering writes: p50 14,496 µs (5 of 5 runs had one) |
+| put_sync | 1,906.9 / 2,249.3 / 4,071.7 | 1898.5 / 2254.4 / 3873.4 | flush-triggering writes: p50 20,789 µs (5 of 5 runs had one) |
+| get_hit | 1,288.3 / 2,879.7 / 3,255.7 | 0.5 / 0.7 / 3.4 |  |
+| get_miss | 18,380.3 / 20,952.4 / 21,916.5 | 0.3 / 0.6 / 0.7 |  |
+| mixed_all | 857.5 / 2,757.8 / 3,248.9 | 0.5 / 4.6 / 8.8 |  |
+| mixed_get | 1,422.4 / 2,848.6 / 3,150.5 | 0.5 / 0.6 / 0.8 |  |
+| mixed_put | 12.0 / 46.7 / 29,144.3 | 4.4 / 6.8 / 28.5 | flush-triggering writes: p50 29,144 µs (5 of 5 runs had one) |
+| mixed_delete | 12.9 / 21.5 / 21.5 | 4.4 / 16.8 / 16.8 |  |
+
+## Analysis
+
+Everything below refers to the measurements above.
+
+1. **Flush behavior: periodic spikes on a flat baseline.** Writes that trigger a flush take 50–59 ms at the median (p99 64–122 ms, slowest 175 ms), against a non-flush median of 4.8 µs. A flush-triggering write is about 10,518–12,283 times a normal PUT, and the flush accounts for 99.9% or more of that write's latency. The spikes are exactly periodic (37,787 operations apart at every scale). Spike and baseline are cleanly separated: out of 50,498,672 non-flush writes in all runs, 2 were as slow as the fastest flush-triggering write of their run (all in one run at S3, where a single non-flush write took 234 ms, an unexplained stall). In every other run the slowest non-flush write was faster than the fastest flush. Because the pattern is isolated spikes at a fixed interval, "periodic spikes" describes it. This benchmark didn't measure a within-cycle ramp, so it doesn't establish a sawtooth in the sense of latency growing between flushes.
+2. **Flush cost is nearly independent of database size and mostly fixed overhead.** The median flush is 50, 53 and 56 ms at S3, S4 and S5, with the same 4,685,616-byte table every time. At the 16 KiB limit (a table 255 times smaller) it's 14.3 ms. A 255× larger table costs 3.9× the time, so most of a small flush isn't proportional to table size. The part outside `write_sstable` is 12 ms for the small tables and 17, 17 and 17 ms for the large ones. Why isn't known: fsync and file creation/deletion on this filesystem with Defender running are candidates, but they weren't tested. Only these two table sizes were measured.
+3. **Write throughput and latency vs V1.** Between flushes a V2 write costs about the same as a V1 write (non-flush p50 4.8 µs vs V1 4.6 µs at S5). Averaged over the load, the flush adds 1.15–1.48 µs per PUT (1.48 at S5). That matches the throughput gap, since the mean time per PUT is 1.52 µs higher than V1's at S5: V2 sustained 149,106 ops/s against V1's 192,683 at S5 (0.77×; 0.77–0.78× at S3–S5). The slowest single write at S5 is 132 ms for V2 (always a flush) and 173 ms for V1 (V1's slowest write grew with N, and the V1 section notes this fits memtable dict resizes, which wasn't isolated). At S2 V2's slowest write (59 ms) is 33× V1's (1.8 ms). Overwrite and delete p50 are 1.02–1.22× (overwrite) and 0.94–1.13× (delete) of V1's. Those phases never flushed, so they compare only the memtable-resident write path, in invocations made at different times.
+4. **GET hits.** V2 hit p50 is 17.9 ms at S2 and 29.7 ms at S5, against V1's 0.5–0.8 µs (V1 never reads files on a GET) and V0's 80.7 ms to 7,842 ms. Against V0 a V2 hit is 0.22× at S2 and 0.0038× at S5, because a hit scans about half a table (19,038 records on average at S5) instead of the whole file. Across the scales that have tables, the log-log slope of the V2 hit p50 against the record count is 0.115 (R² 0.96). The p50 grows 1.66× while the record count grows 100×, because the number of records examined per hit stays at 18,550–19,674 from S3 up and only the number of newer tables opened (one record each) grows (13.1 at S3, 135.2 at S5). The fit over all five scales isn't meaningful, since S1 has no tables and is a memtable lookup identical to V1 (p50 0.4 µs). In this layout a hit is cheap because newer tables are skipped after one record (see Limitations). The p99 of a hit is 2.0× its p50 at S5.
+5. **GET misses.** A miss scans every record of every table, so it grows linearly with the data: the log-log slope of the miss p50 against the record count over the scales with tables is 1.06 (R² 0.9992), at 1.32 µs per record. A miss takes 13.2 s at S5. **That is 1.58–1.67× V0's GET at S3–S5 (1.67× at S5), so V2 is slower than V0 for a key that isn't present.** V2 examines almost the same records as V0's scan (9,975,768 at S5, the flushed ones, against V0's 10,000,000), with 264 files opened instead of one, and the per-record cost measured here (1.32 µs) is higher than V0's (0.79 µs). Why wasn't tested. Extra work per record in the table reader (the bounded view, the key-order check) and the file opens are candidates. The S2 miss (101 ms) is 1.24× V0's.
+6. **Recovery.** V2's open takes 29–78 ms from S2 to S5, against V1's 0.11–11.0 s (0.31× at S2, 0.0071× at S5). It stays within a narrow band because the WAL it replays is only the unflushed tail (12,116–24,426 records here, which varies with where the last flush fell), plus one footer read per table. The footer validation grows with the table count (16.9 ms for 264 tables at S5, about 64 µs per table). The open at S5 (78 ms) is the largest and is 2.4× that at S4, and the measured components account for about 50% of it. The rest wasn't attributed. These opens last tens of milliseconds, so the between-run spread (6–19%) is large in relative terms. At S1 nothing was flushed and V2's open (21 ms) equals V1's (20 ms), since it replays the whole WAL. This is a warm-cache measurement of a clean shutdown, and it doesn't include the cost of a first GET after the open (which scans tables, above).
+7. **Memory.** The private-memory delta after loading doesn't follow the database size: 1.7, 7.4, 8.6, 11.1 and 11.5 MB at S1, S2, S3, S4 and S5, against V1's 2, 25, 236, 1,136 and 2,273 MB (V2 / V1 = 0.704, 0.297, 0.036, 0.010, 0.005). From S3 to S5 the database grows 10× and the delta grows 1.34×. The numbers aren't a clean function of N. They depend on how full the memtable is when the probe ends (the entries column) and on allocator state after flushes, and a straight-line fit against N has R² 0.55. After open the delta is 3.9–5.4 MB at S2–S5. The V2 process peak working set after load is 33–35 MB for S2–S5, including the interpreter. These are observations for CPython 3.10.6 on Windows with this key/value shape.
+8. **WAL reclamation and SSTable growth.** The WAL never holds more than one table's worth of records. It was 4,685,588 bytes before every flush and one segment at all times, ending at 3,152,768 bytes at S5, against V1's WAL of 1,240,148,000 bytes. The table count grows linearly with the data (0, 2, 26, 132 and 264 tables at S1, S2, S3, S4 and S5), and tables are never merged or deleted.
+9. **Space and write amplification.** Total persistent bytes are 1,240,155,392 at S5 and space amplification is 1.1174, the same as V1's (1.1174), because every record is stored once, in a table or in the WAL. The 2,000 stale records (one per overwrite and delete) are the only duplication, and each table adds a 28-byte footer (7,392 bytes in all at S5). Each record's bytes are written twice, once to the WAL and once to a table. The rewrite factor is 1.000, 1.747, 1.981, 1.997 and 1.997 at S1, S2, S3, S4 and S5 (V1: 1 by definition, one WAL copy), and V2 appends 2.23 bytes per payload byte against V1's 1.12. The factor tends to 2 as the unflushed WAL tail becomes a smaller share of the data, and at S1, which never flushes, it's 1. No data is rewritten beyond this one copy.
+10. **10,000-key workloads.** Without a flush, V2's operations are within noise of V1's, or slightly higher on writes (PUT p50 4.5 vs 4.2 µs; `sync=True` PUT 1,914 vs 1,898 µs; mixed PUT 5.0 vs 4.4 µs). Reads are within one 100 ns clock tick of V1's at the median (the 100,000-miss p50 is 0.4 µs against V1's 0.3 µs). With the 16 KiB limit the same workload shows the cost of tables: GET hit p50 1.29 ms and miss 18.4 ms (V1: 0.5 and 0.3 µs), and a mixed workload whose GETs take 1.42 ms at the median. A `sync=True` PUT that triggers a flush took a median 20.8 ms against 1.91 ms for one that didn't.
+11. **Tradeoffs.** V2 trades read cost and write latency for memory and recovery. On the plus side, it bounds memory (a few MB of private bytes after the load at every scale measured, against V1's growth with the key count), cuts open time to tens of milliseconds, and reclaims the WAL. On the cost side, it has milliseconds-to-seconds GETs that reach the tables (a hit about 30 ms and a miss 13 s at S5, where V1 answers in under a microsecond), a miss that's slower than V0's full scan, periodic write stalls of about 50 ms, roughly 1.29× the write time per record on a sustained load, and twice the bytes written. V2 isn't better than V1 on every metric. On read latency it's far worse once data leaves the memtable, and relative to V0 it improves hits and worsens misses.
+
+## Limitations
+
+- **Workload layout.** Keys are loaded in ascending order, so tables hold disjoint, ordered key ranges and a hit skips every newer table after one record. A load in random key order would make table key ranges overlap and change the hit cost, but that wasn't measured. Miss keys exceed every stored key, so a miss scans everything. A miss key inside the key range would stop early in each table that has a larger key. Hits are uniformly distributed over the keyspace.
+- **Memtable-resident keys.** At the end of the load, 0.2–24% of the keys sit in the memtable and are answered without file access (the percentages in the read-work table). The overwrite and delete phases also hit the memtable.
+- **One configuration.** Only the default 4 MiB limit was measured at scale, plus one 16 KiB limit on the 10,000-key workloads. Flush frequency, table counts and GET cost all depend on it.
+- **Machine state.** The operator kept the machine idle during the ladder (not independently verified). Windows Defender and other resident security software stayed enabled, no CPU affinity was set, and timings remain sensitive to machine load (see the V0 and V1 limitations).
+- **Resolution and caches.** As for V1. All numbers are warm-cache, so nothing here says anything about cold reads of tables.
+- **Delete-triggered flushes.** None occurred in any scaling run, so the flush-triggering DELETE latency wasn't measured at scale. In the 16 KiB runs, flush-triggering writes came from PUTs.
+- **Open breakdown.** The component times are from a separate warm repetition and cover only part of the timed open.
+- **Memory.** Private-byte deltas depend on the memtable fill level and allocator state at the moment of reading, so they aren't a function of N alone. The V2 deltas are a few MB, and the three probes at a scale differ by up to 1.2 MB.
+- **Statistics.** Tails of misses at S4 and S5 rest on 150 samples, open times of tens of milliseconds have large relative spread, and the V0 and V1 references come from earlier invocations. In one run at S3, a non-flush write stalled for 234 ms for a reason that wasn't identified.
+- **Causes.** Where the text says a cause is a candidate (file opens, extra per-record work, fixed costs of fsync/creation/deletion), the benchmark didn't test it.
+- **Not measured:** physical I/O, concurrent access, cold-cache behavior, a random-order load, other flush limits at scale, flush-triggering deletes, and sustained workloads longer than the ladder.
+
+## Environment
+
+**Environment:** Python 3.10.6 (MSC v.1932, 64-bit); Windows 11 (`Windows-10-10.0.26300-SP0`); Intel Core i7-14650HX (`Intel64 Family 6 Model 183`), 24 logical CPUs; 15.8 GB RAM; seed 42; key 11 B; value 100 B; `sync=False` for the scaling runs; default `memtable_limit_bytes` = 4 MiB.
