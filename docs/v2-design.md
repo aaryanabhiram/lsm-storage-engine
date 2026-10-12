@@ -2,7 +2,7 @@
 
 V2 adds immutable sorted files (SSTables) to V1's WAL + memtable. When the memtable gets large it's written out as an SSTable and the WAL records it covered are dropped, so memory and recovery work are bounded by the *unflushed* data rather than by the whole database.
 
-V2 turns `store.py` into a directory-based store (`KVStore`), with `sstable.py` (the table format) and `fsutil.py` (a directory-fsync helper). It reuses the V0/V1 record format and `WriteAheadLog`/`replay`.
+V2 turns `store.py` into a directory-based store (`KVStore`), with `sstable.py` (the table format) and `fsutil.py` (a directory-fsync helper). It reuses the V0/V1 record format and `WriteAheadLog`/`replay`. `sstable.py` also reads and writes the V3 indexed format ([v3-design.md](v3-design.md)), but the V2 store itself always writes the unindexed format described here.
 
 ```
 PUT/DELETE:  [flush first if the memtable is full] -> WAL append -> memtable update

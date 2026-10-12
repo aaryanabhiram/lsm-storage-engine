@@ -1,12 +1,14 @@
 import os
 import re
 
+from . import sstable
 from .fsutil import fsync_dir
 from .record import OP_DELETE, OP_PUT, CorruptionError, read_records
-from .sstable import NOT_FOUND, SSTable, write_sstable
+from .sstable import NOT_FOUND, SSTable
 from .wal import WriteAheadLog, replay
 
 DEFAULT_MEMTABLE_LIMIT_BYTES = 4 * 1024 * 1024
+DEFAULT_INDEX_INTERVAL = 16  # records per index block
 
 _WAL_RE = re.compile(r"^wal-(\d{8})\.log$")
 _SST_RE = re.compile(r"^sst-(\d{8})\.sst$")
@@ -21,10 +23,15 @@ def _entry_size(key, value):
 class KVStore:
     # TODO _sstables only ever grows and get() checks every table newest -> oldest, so reads get slower the more tables pile up
     # TODO memtable limit is key+value bytes only, dict overhead isn't counted so real mem use is a few x the limit
+    # TODO index_interval hardcoded to 16, never tuned (bigger = smaller index but longer scans)
 
-    def __init__(self, path, sync=True, memtable_limit_bytes=DEFAULT_MEMTABLE_LIMIT_BYTES):
+    def __init__(self, path, sync=True, memtable_limit_bytes=DEFAULT_MEMTABLE_LIMIT_BYTES,
+                 index_interval=DEFAULT_INDEX_INTERVAL):
         if not isinstance(memtable_limit_bytes, int) or memtable_limit_bytes < 1:
             raise ValueError("memtable_limit_bytes must be a positive integer")
+        if not isinstance(index_interval, int) or isinstance(index_interval, bool) or index_interval < 1:
+            raise ValueError("index_interval must be a positive integer")
+        self._index_interval = index_interval
         self._dir = path
         self._sync = sync
         self._limit = memtable_limit_bytes
@@ -61,6 +68,8 @@ class KVStore:
     def put(self, key, value):
         self._check_bytes(key, value)
         self._check_open()
+
+
         # flush runs inline when the memtable is full, so this put() eats the whole sstable write + fsync. bg thread someday
         self._flush_if_full()  # flush first so a failed flush can't leave a half applied put
         self._wal.append(OP_PUT, key, value)  # may raise: memtable untouched
@@ -90,7 +99,7 @@ class KVStore:
             return
         # 1. write the sst. nothing changed until the rename in write_sstable returns, wal still has everything
         sst_path = self._sst_path(self._take_id())
-        write_sstable(sst_path, sorted(self._memtable.items()))
+        sstable.write_sstable(sst_path, sorted(self._memtable.items()), index_interval=self._index_interval)
         self._sstables.append(SSTable(sst_path))
         # 2. sst covers the memtable now, new wal segment
         new_id = self._take_id()
@@ -101,8 +110,6 @@ class KVStore:
         self._wal_id = new_id
         self._memtable = {}
         self._mem_bytes = 0
-
-
         # 3. old wal segs are redundant now, delete oldest first
         old_wal.close()
         self._delete_segments_before(new_id)
@@ -130,9 +137,9 @@ class KVStore:
 
     def _delete_segments_before(self, wal_id):
         # oldest first on purpose: if we die halfway the leftovers are the newest segments, replaying those can't bring back stale values
-        for oid in self._ids(_WAL_RE):
-            if oid < wal_id:
-                os.remove(self._wal_path(oid))
+        for old_id in self._ids(_WAL_RE):
+            if old_id < wal_id:
+                os.remove(self._wal_path(old_id))
 
     def _replay_segments(self, wal_ids):
         kv_map = {}

@@ -4,7 +4,7 @@ import random
 
 import pytest
 
-from lsm_store import CorruptionError, KVStore
+from lsm_store import CorruptionError, KVStore, sstable
 from lsm_store.record import OP_PUT, encode
 
 
@@ -184,3 +184,48 @@ def test_random_ops_match_a_dict(path):
         key = b"k%d" % n
         assert db.get(key) == expected.get(key)
     db.close()
+
+
+def test_index_interval_must_be_positive(path):
+    with pytest.raises(ValueError):
+        KVStore(path, index_interval=0)
+
+
+def test_every_key_found_with_a_small_index_interval(path):
+    with KVStore(path, memtable_limit_bytes=200, index_interval=2) as db:
+        for i in range(0, 100, 2):
+            db.put(b"key%03d" % i, b"value%03d" % i)
+        assert len(sstables(path)) > 1
+        for i in range(0, 100, 2):
+            assert db.get(b"key%03d" % i) == b"value%03d" % i
+
+
+def test_missing_keys_before_between_and_after_the_stored_range(path):
+    with KVStore(path, index_interval=3) as db:
+        for i in range(10, 40, 2):
+            db.put(b"key%03d" % i, b"v")
+        db.flush()
+        assert db.get(b"key005") is None  # before the first key
+        assert db.get(b"key011") is None  # between two keys
+        assert db.get(b"key099") is None  # after the last key
+
+
+def test_old_unindexed_table_is_still_readable(path):
+    os.makedirs(path)
+    sstable.write_sstable(os.path.join(path, "sst-00000001.sst"), [(b"a", b"1"), (b"b", None)])  # no index
+    with KVStore(path) as db:
+        assert db.get(b"a") == b"1"
+        assert db.get(b"b") is None
+
+
+def test_corrupted_sstable_footer_raises_on_open(path):
+    with KVStore(path) as db:
+        db.put(b"a", b"1")
+        db.flush()
+    table = sstables(path)[0]
+    data = bytearray(open(table, "rb").read())
+    data[-10] ^= 0xFF  # inside the footer
+    with open(table, "wb") as f:
+        f.write(data)
+    with pytest.raises(CorruptionError):
+        KVStore(path)
