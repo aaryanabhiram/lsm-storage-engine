@@ -1,31 +1,26 @@
-"""Deterministic structural/storage metrics for the V2 SSTable store.
+"""Deterministic structural/storage metrics for the V3 sparse-index store.
 
-Usage:  python benchmarks/structural.py [--out benchmarks/results/v2_structural.json]
+Usage:  python benchmarks/structural.py [--out benchmarks/results/v3_structural.json]
 
-Nothing here is timed. The V2 workload is deterministic (N distinct keys loaded in ascending key order, 1,000
-overwrites of existing keys, 1,000 deletes of existing keys; see docs/benchmarks.md), so the SSTable layout, the WAL
-sizes and the work of a GET follow from the store's flush rule and the record format. This script derives them and
-asserts that they equal what the benchmark measured on disk in every run. "Records examined" and "bytes scanned"
-are application-level work counted in the record reader, not physical storage I/O.
+Nothing here is timed. The workload is V2's (N distinct keys loaded in ascending key order, 1,000 overwrites, 1,000
+deletes), so the SSTable layout, the WAL sizes, the index sizes and the work of a GET follow from the store's flush
+rule, the record format and the index rule (one entry per 16 records). This script derives them and asserts that they
+equal what the benchmark measured on disk and in the instrumented GETs of every run. "Records decoded" and "bytes
+decoded" are application-level work counted in the record reader, not physical storage I/O.
 
-How the derivation follows the store: a write first flushes if the memtable's payload bytes (key + value; a tombstone
-counts its key) have reached the limit, so with 111 payload bytes per entry the load flushes every
-E = ceil(limit / 111) entries. The overwrite and delete phases are replayed operation by operation against the same
-rule (no I/O).
+The memtable, flush rule and WAL are V2's, so the flush sequence and WAL numbers come from `structural.simulate`;
+only the byte size of each table changes: a V3 table is records + index block + 44-byte footer, where the index block
+has ceil(records / 16) entries of 4 + 8 + 11 = 23 bytes.
 
-Write-side ratios, with exact definitions (measured at the end of the delete phase, before close):
-  logical_payload_bytes  key + value bytes of every mutation (a delete counts its key)
-  logical_record_bytes   the bytes V1 would append for the same mutations: one encoded record each
-  wal_bytes_appended     record bytes appended to WAL segments (all segments ever written)
-  sstable_bytes_written  every byte of every SSTable (records + 28-byte footers); tables are never rewritten
-  bytes_per_payload_byte (wal_bytes_appended + sstable_bytes_written) / logical_payload_bytes
-                         includes the 13-byte record header overhead
-  rewrite_factor         (wal_bytes_appended + sstable_bytes_written) / logical_record_bytes
-                         excludes header overhead: how many times a record's bytes reach a file. V2 writes a surviving
-                         entry once to the WAL and once to a table; nothing rewrites them later.
-                         Three effects move it away from exactly 2: footers add bytes, records still in the memtable
-                         have only reached the WAL, and overwrites that coalesce in the memtable reach a table once.
+Derived GET work (a hit on key i, loaded in ascending order, tables of E records, f flushed tables, j = i // E):
+  memtable hit  (i >= f * E)        0 tables consulted
+  table hit     tables newer than j: lookup called, the key sorts below the table's first key, the index rules it
+                out with no file access (consulted, skipped, 0 records);
+                table j: one block opened, (i - j*E) % 16 + 1 records decoded.
+  miss (above every key)            every table consulted, none skipped, each opens its last block and decodes its
+                                    E - 16 * (ceil(E/16) - 1) records.
 """
+
 
 import argparse
 import json
@@ -33,14 +28,18 @@ import statistics
 from pathlib import Path
 
 from bench import (
-    DELETE_RECORD_BYTES, ENTRY_PAYLOAD, N_DELETES, N_OVERWRITES, PUT_RECORD_BYTES, ROOT,
-    STRUCT_HITS, STRUCT_MISSES, V0_SCALES, key_of, workload
+    DELETE_RECORD_BYTES, ENTRY_PAYLOAD, INDEX_ENTRY_BYTES, N_DELETES, N_OVERWRITES,
+    PUT_RECORD_BYTES, ROOT, STRUCT_HITS, STRUCT_MISSES, V0_SCALES, index_bytes, index_entries,
+    key_of, workload
 )
-from lsm_store.sstable import FOOTER_SIZE
+from lsm_store.sstable import FOOTER_SIZE, FOOTER_V3_SIZE
+from lsm_store.store import DEFAULT_INDEX_INTERVAL
 
 KEY_SIZE = len(key_of(0))
 TOMBSTONE_PAYLOAD = KEY_SIZE
+INTERVAL = DEFAULT_INDEX_INTERVAL
 
+# ---- carried over from the earlier stages ----------------------------------------
 
 def entries_per_table(limit):
     return -(-limit // ENTRY_PAYLOAD)
@@ -102,39 +101,56 @@ def simulate(records, limit, overwrite_keys, delete_keys_):
             "final_memtable_tombstones": sum(1 for t in mem.values() if t)}
 
 
-def get_work(records, limit, hit_idx, miss_count):
-    """Structural work of GETs issued right after the load: derived per key. Keys were loaded in ascending order,
-    so each table holds a contiguous key range and every newer table is skipped after reading one record."""
+def v3_table_bytes(v2_bytes, records, interval=INTERVAL):
+    """A V2 table of `records` records and `v2_bytes` bytes becomes: same records + index block + 44-byte footer."""
+    return v2_bytes - FOOTER_SIZE + index_bytes(records, interval) + FOOTER_V3_SIZE
+
+
+def simulate_v3(records, limit, overwrite_keys, delete_keys_, interval=INTERVAL):
+    """structural.simulate with every table's size converted to the V3 format."""
+    sim = simulate(records, limit, overwrite_keys, delete_keys_)
+    tables = [[c, v3_table_bytes(b, c, interval)] for c, b in sim["tables"]]
+    flushes = [{**f, "table_bytes": v3_table_bytes(f["table_bytes"], f["table_records"], interval)}
+               for f in sim["flushes"]]
+    states = {name: {**st, "sst_bytes": sum(b for _, b in tables[:st["sst_files"]])}
+              for name, st in sim["states"].items()}
+    return {**sim, "tables": tables, "flushes": flushes, "states": states}
+
+
+def get_work(records, limit, hit_idx, miss_count, interval=INTERVAL):
+    """Structural work of GETs issued right after the load. Rows match bench.measure_read_work:
+    [category, tables_consulted, tables_skipped_by_index, blocks_read, records_decoded, bytes_decoded]."""
     e = entries_per_table(limit)
     f = (records - 1) // e
 
     def hit(i):
         if i >= f * e:
-            return ["memtable_hit", 0, 0, 0]
+            return ["memtable_hit", 0, 0, 0, 0, 0]
         j = i // e
-        tables = f - j
-        recs = (f - 1 - j) + (i - j * e + 1)
-        return ["newest_sstable_hit" if tables == 1 else "older_sstable_hit", tables, recs, recs * PUT_RECORD_BYTES]
+        recs = (i - j * e) % interval + 1
+        consulted = f - j
+        return ["newest_sstable_hit" if consulted == 1 else "older_sstable_hit", consulted, consulted - 1, 1, recs,
+                recs * PUT_RECORD_BYTES]
 
-    miss = ["miss", f, f * e, f * e * PUT_RECORD_BYTES]
+    last_block_records = e - interval * (index_entries(e, interval) - 1)
+    miss = ["miss", f, 0, f, f * last_block_records, f * last_block_records * PUT_RECORD_BYTES]
     return {"hit": [hit(i) for i in hit_idx], "miss": [miss] * miss_count}
 
 
 def summarize_work(rows):
+    names = ("tables_consulted", "tables_skipped_by_index", "blocks_read", "records_decoded", "bytes_decoded")
     out = {}
     for cat in sorted({r[0] for r in rows}):
         sel = [r for r in rows if r[0] == cat]
         out[cat] = {"gets": len(sel), "fraction": len(sel) / len(rows),
-                    "mean_tables_consulted": statistics.fmean(r[1] for r in sel),
-                    "mean_records_examined": statistics.fmean(r[2] for r in sel),
-                    "mean_bytes_scanned": statistics.fmean(r[3] for r in sel),
-                    "max_records_examined": max(r[2] for r in sel)}
+                    **{f"mean_{n}": statistics.fmean(r[i + 1] for r in sel) for i, n in enumerate(names)},
+                    "max_records_decoded": max(r[4] for r in sel)}
     return out
 
 
 def structural_metrics(records, limit, hit_idx, miss_count, overwrite_keys,
-                       delete_keys_):
-    sim = simulate(records, limit, overwrite_keys, delete_keys_)
+                       delete_keys_, interval=INTERVAL):
+    sim = simulate_v3(records, limit, overwrite_keys, delete_keys_, interval)
     tables = sim["tables"]
     st = sim["states"]["after_deletes"]
     distinct_deleted = len(set(delete_keys_))
@@ -142,48 +158,48 @@ def structural_metrics(records, limit, hit_idx, miss_count, overwrite_keys,
     live_payload = live * ENTRY_PAYLOAD
     table_records = [t[0] for t in tables]
     table_bytes = [t[1] for t in tables]
+    idx_entries = [index_entries(c, interval) for c in table_records]
+    idx_bytes = [index_bytes(c, interval) for c in table_records]
     logical_payload = records * ENTRY_PAYLOAD + len(overwrite_keys) * ENTRY_PAYLOAD + len(delete_keys_) * KEY_SIZE
     logical_records = (records + len(overwrite_keys)) * PUT_RECORD_BYTES + len(delete_keys_) * DELETE_RECORD_BYTES
     written = sim["wal_appended_bytes"] + sum(table_bytes)
     persistent = sum(table_bytes) + st["wal_bytes"]
-    flush_payload = [f["memtable_bytes"] for f in sim["flushes"]]
     e = entries_per_table(limit)
     return {
         "memtable_limit_bytes": limit,
+        "index_interval": interval,
         "entries_per_load_table": e,
         "format": {"put_record_bytes": PUT_RECORD_BYTES, "delete_record_bytes": DELETE_RECORD_BYTES,
-                   "sstable_footer_bytes": FOOTER_SIZE, "user_bytes_per_put": ENTRY_PAYLOAD,
-                   "bytes_appended_per_user_byte_put": PUT_RECORD_BYTES / ENTRY_PAYLOAD},
+                   "sstable_footer_bytes": FOOTER_V3_SIZE, "index_entry_bytes": INDEX_ENTRY_BYTES,
+                   "user_bytes_per_put": ENTRY_PAYLOAD},
         "flushes": {"total": len(tables), "during_load": (records - 1) // e,
                     "during_overwrites": sum(1 for f in sim["flushes"] if f["phase"] == "put_overwrite"),
                     "during_deletes": sum(1 for f in sim["flushes"] if f["phase"] == "delete"),
-                    "records_flushed_total": sum(table_records),
-                    "payload_bytes_flushed_total": sum(flush_payload),
-                    "footer_bytes_total": FOOTER_SIZE * len(tables),
-                    "records_per_flush_min_max_mean": [min(table_records, default=0), max(table_records, default=0),
-                                                       statistics.fmean(table_records) if table_records else 0]},
+                    "records_flushed_total": sum(table_records)},
         "sstables": {"count": len(tables), "total_records": sum(table_records), "total_bytes": sum(table_bytes),
-                     "bytes_min_max_mean": [min(table_bytes, default=0), max(table_bytes, default=0),
-                                            statistics.fmean(table_bytes) if table_bytes else 0],
                      "records": table_records, "bytes": table_bytes},
+        "index": {"entries_per_load_table": index_entries(e, interval),
+                  "bytes_per_load_table": index_bytes(e, interval),
+                  "last_block_records_per_load_table": e - interval * (index_entries(e, interval) - 1),
+                  "entries_total": sum(idx_entries), "bytes_total": sum(idx_bytes),
+                  "entries": idx_entries, "bytes": idx_bytes,
+                  "share_of_sstable_bytes": sum(idx_bytes) / sum(table_bytes) if table_bytes else None,
+                  "bytes_per_record": sum(idx_bytes) / sum(table_records) if table_records else None,
+                  "footer_bytes_total": FOOTER_V3_SIZE * len(tables)},
         "wal": {"segments_at_end": 1, "bytes_at_end": st["wal_bytes"], "records_at_end": st["wal_records"],
-                "bytes_appended_total": sim["wal_appended_bytes"],
-                "bytes_before_each_flush_min_max": [min((f["wal_bytes_before"] for f in sim["flushes"]), default=0),
-                                                    max((f["wal_bytes_before"] for f in sim["flushes"]), default=0)],
-                "bytes_after_each_flush": 0},
+                "bytes_appended_total": sim["wal_appended_bytes"]},
         "states": sim["states"],
         "space": {"live_keys": live, "tombstoned_keys": distinct_deleted, "live_user_payload_bytes": live_payload,
                   "sstable_bytes": sum(table_bytes), "surviving_wal_bytes": st["wal_bytes"],
                   "total_persistent_bytes": persistent,
                   "space_amplification": persistent / live_payload,
                   "physical_records": sum(table_records) + st["wal_records"],
-                  "stale_records": sum(table_records) + st["wal_records"] - records,
-                  "record_format_overhead_factor": PUT_RECORD_BYTES / ENTRY_PAYLOAD},
+                  "stale_records": sum(table_records) + st["wal_records"] - records},
         "writes": {"logical_payload_bytes": logical_payload, "logical_record_bytes": logical_records,
                    "wal_bytes_appended": sim["wal_appended_bytes"], "sstable_bytes_written": sum(table_bytes),
                    "bytes_per_payload_byte": written / logical_payload, "rewrite_factor": written / logical_records},
-        "get_work_timed_workload": {"hit": summarize_work(get_work(records, limit, hit_idx, 0)["hit"]),
-                                    "miss": summarize_work(get_work(records, limit, [], 1)["miss"])},
+        "get_work_timed_workload": {"hit": summarize_work(get_work(records, limit, hit_idx, 0, interval)["hit"]),
+                                    "miss": summarize_work(get_work(records, limit, [], 1, interval)["miss"])},
         "_simulation": sim,
     }
 
@@ -200,6 +216,7 @@ def build_report(result):
         sim = m.pop("_simulation")
         expect_work = get_work(records, limit, hit_idx[:STRUCT_HITS], STRUCT_MISSES)
         for run in entry["runs"]:
+            assert run["index_interval"] == INTERVAL
             assert run["entries_per_table"] == m["entries_per_load_table"]
             assert run["state"]["after_load"] == {k: sim["states"]["after_load"][k] for k in
                                                   ("wal_files", "wal_bytes", "sst_files", "sst_bytes")}
@@ -208,18 +225,25 @@ def build_report(result):
                                               ("wal_files", "wal_bytes", "sst_files", "sst_bytes")}, name
             assert run["state"]["final_closed"] == run["state"]["after_deletes"]
             assert run["tables_final"] == sim["tables"], "SSTable layout differs from the derived layout"
+            assert [c for c, _ in run["index_tables"]] == m["index"]["entries"], "index entry counts differ"
+            assert [b for _, b in run["index_tables"]] == m["index"]["bytes"], "index block sizes differ"
+            n_load = sim["states"]["after_load"]["sst_files"]  # the timed open happens right after the load
+            assert run["open_components"]["tables"] == n_load
+            assert run["open_components"]["index_bytes_read"] == sum(m["index"]["bytes"][:n_load])
+            assert run["open_components"]["index_entries_loaded"] == sum(m["index"]["entries"][:n_load])
+            assert run["index_memory"]["index_entries"] == m["index"]["entries_total"]
             measured = [dict(phase=ph, **{k: f[k] for k in ("op_index", "memtable_entries", "memtable_bytes",
                                                             "table_records", "table_bytes", "wal_bytes_before")})
                         for ph in ("put_load", "put_overwrite", "delete") for f in run["flushes"][ph]]
             assert measured == sim["flushes"], "flush sequence differs from the derived sequence"
+            assert all(f["index_interval"] == INTERVAL for ph in run["flushes"] for f in run["flushes"][ph]), \
+                "a flush wrote a table with a different index interval"
             assert all(f["wal_files_before"] == 1 and f["wal_files_after"] == 1
                        for ph in run["flushes"] for f in run["flushes"][ph]), "WAL segments were not reclaimed"
             assert run["final_memtable_entries"] == sim["states"]["after_deletes"]["memtable_entries"]
             assert run["final_memtable_payload_bytes"] == sim["states"]["after_deletes"]["memtable_payload_bytes"]
             assert run["read_work"]["hit"] == expect_work["hit"], "measured hit work differs from derived"
             assert run["read_work"]["miss"] == expect_work["miss"], "measured miss work differs from derived"
-            # Total WAL bytes appended, measured from the files: bytes in each segment when its flush ran, plus the
-            # surviving segment.
             measured_appended = sum(f["wal_bytes_before"] for ph in run["flushes"] for f in run["flushes"][ph]) \
                 + run["state"]["final_closed"]["wal_bytes"]
             assert measured_appended == m["wal"]["bytes_appended_total"], "WAL bytes appended differ"
@@ -231,13 +255,14 @@ def build_report(result):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--benchmark", default=str(ROOT / "benchmarks/results/v2_benchmark.json"))
-    ap.add_argument("--out", default=str(ROOT / "benchmarks/results/v2_structural.json"))
+    ap.add_argument("--benchmark", default=str(ROOT / "benchmarks/results/v3_benchmark.json"))
+    ap.add_argument("--out", default=str(ROOT / "benchmarks/results/v3_structural.json"))
     args = ap.parse_args()
     bench = json.loads(Path(args.benchmark).read_text())
     result = {
-        "kind": "deterministic structural metrics (derived, not timed); layout, flush sequence, WAL sizes and GET work "
-                "asserted equal to the values measured in every run",
+        "kind": "deterministic structural metrics (derived, not timed); layout, index sizes, flush sequence, WAL sizes "
+                "and GET work asserted equal to the values measured in every run",
+        "index_interval": INTERVAL,
         "overwrites_after_load": N_OVERWRITES,
         "deletes_after_overwrites": N_DELETES,
         "scales": build_report(bench),
@@ -245,8 +270,8 @@ def main():
     Path(args.out).write_text(json.dumps(result, indent=1))
     for key, m in result["scales"].items():
         print(f"{int(key):>10,}  tables {m['sstables']['count']:>4}  SST {m['sstables']['total_bytes']:>13,} B  "
-              f"WAL {m['wal']['bytes_at_end']:>9,} B  space amp {m['space']['space_amplification']:.4f}  "
-              f"rewrite factor {m['writes']['rewrite_factor']:.4f}")
+              f"index {m['index']['bytes_total']:>11,} B / {m['index']['entries_total']:>8,} entries  "
+              f"space amp {m['space']['space_amplification']:.4f}  rewrite factor {m['writes']['rewrite_factor']:.4f}")
 
 
 if __name__ == "__main__":

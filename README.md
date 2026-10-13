@@ -26,7 +26,7 @@ The API, record format, invariants, durability policy and known limitations are 
 
 **V2 is implemented** as `KVStore`, which adds immutable sorted SSTables. When the memtable reaches a size limit it's written to a checksummed SSTable (reusing the V0/V1 record format plus a footer), the WAL moves to a fresh segment, and the covered segments are deleted. `get` checks the memtable, then SSTables newest to oldest, and a table is found by a sequential scan. The store is a directory, not a single file. See [docs/v2-design.md](docs/v2-design.md) for the format, flush protocol, invariants and crash behavior. V2's measured behavior (flush cost and the periodic write stalls it causes, GET cost across tables, open time, memory, WAL and SSTable growth) is in [docs/benchmarks.md](docs/benchmarks.md#v2-benchmark).
 
-**V3 is implemented** as `KVStore`, which adds a sparse index inside each SSTable: one entry (first key and file offset) per 16 records by default. A lookup binary-searches the in-memory index, then reads and scans only the selected block of the table instead of the whole file. Everything else (WAL, memtable, synchronous flush, recovery) is V2's, and V2 tables are still readable. See [docs/v3-design.md](docs/v3-design.md). V3 has not been benchmarked yet.
+**V3 is implemented** as `KVStore`, which adds a sparse index inside each SSTable: one entry (first key and file offset) per 16 records by default. A lookup binary-searches the in-memory index, then reads and scans only the selected block of the table instead of the whole file. Everything else (WAL, memtable, synchronous flush, recovery) is V2's, and V2 tables are still readable. See [docs/v3-design.md](docs/v3-design.md). V3's measured behavior against V2 (GET latency, records decoded per GET, open time, memory, index size, write cost) is in [docs/benchmarks.md](docs/benchmarks.md#v3-benchmark).
 
 ## Architecture roadmap
 
@@ -37,7 +37,7 @@ Versions so far. Each step gets benchmarked against the one before it.
 | V0 | append-only persistent baseline | implemented |
 | V1 | write-ahead log + memtable | implemented, benchmarked |
 | V2 | SSTables | implemented, benchmarked |
-| V3 | sparse index | implemented (not yet benchmarked) |
+| V3 | sparse index | implemented, benchmarked |
 
 ## Performance methodology
 
