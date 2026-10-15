@@ -4,6 +4,7 @@ import struct
 import zlib
 from contextlib import closing
 
+from . import bloom
 from .fsutil import fsync_dir
 from .record import OP_DELETE, OP_PUT, CorruptionError, encode, read_records
 
@@ -16,8 +17,16 @@ _FOOTER_V3_BODY = struct.Struct(">8sQQQII")
 FOOTER_V3_SIZE = _FOOTER_V3_BODY.size + 4  # 44
 _INDEX_ENTRY_HEADER = struct.Struct(">IQ")  # key_len, record offset
 
+MAGIC_V4 = b"LSMSST03"
+_FOOTER_V4_BODY = struct.Struct(">8sQQQIIQII")
+FOOTER_V4_SIZE = _FOOTER_V4_BODY.size + 4  # 60
+
 # lookup() result meaning "this table has no entry for the key" (distinct from a tombstone, None).
 NOT_FOUND = object()
+
+
+def _open_table(path):
+    return open(path, "rb")
 
 
 def _bad_interval(index_interval):
@@ -30,14 +39,38 @@ def _bad_interval(index_interval):
     return False
 
 
-def write_sstable(path, items, index_interval=None):
+def _bad_bloom_bits(bits_per_key):
+    if not isinstance(bits_per_key, int):
+        return True
+    if isinstance(bits_per_key, bool):
+        return True
+    if bits_per_key < 1:
+        return True
+    if bits_per_key > bloom.MAX_BITS_PER_KEY:
+        return True
+    return False
+
+
+def write_sstable(path, items, index_interval=None, bloom_bits_per_key=None):
     if index_interval is not None and _bad_interval(index_interval):
         raise ValueError("index_interval must be a positive integer")
     tmp = path + ".tmp"
     index_entries = []
-    cnt = 0
-    serialized_len = 0
+    count = 0
+    data_len = 0
     prev_key = None
+    bits = None
+    k = 0
+    if bloom_bits_per_key is not None:
+        if _bad_bloom_bits(bloom_bits_per_key):
+            raise ValueError(f"bloom_bits_per_key must be an integer in 1..{bloom.MAX_BITS_PER_KEY}")
+        if index_interval is None:
+            raise ValueError("a Bloom filter requires a sparse index (index_interval)")
+        if not isinstance(items, (list, tuple)):
+            items = list(items)
+        if items:
+            bits = bytearray(bloom.filter_bytes(len(items), bloom_bits_per_key))
+            k = bloom.num_hashes(bloom_bits_per_key)
     try:
         with open(tmp, "wb") as f:
             for key, value in items:
@@ -48,19 +81,28 @@ def write_sstable(path, items, index_interval=None):
                     data = encode(OP_DELETE, key)
                 else:
                     data = encode(OP_PUT, key, value)
-                if index_interval is not None and cnt % index_interval == 0:
-                    index_entries.append(_INDEX_ENTRY_HEADER.pack(len(key), serialized_len) + key)
+                if index_interval is not None and count % index_interval == 0:
+                    index_entries.append(_INDEX_ENTRY_HEADER.pack(len(key), data_len) + key)
+                if bits is not None:
+                    bloom.add(bits, key, k)  # PUT and DELETE alike: a tombstone is a version of the key
                 f.write(data)
-                cnt += 1
-                serialized_len += len(data)
-            if cnt == 0:
+                count += 1
+                data_len += len(data)
+            if count == 0:
                 raise ValueError("refusing to write an empty SSTable")
             if index_interval is None:
-                body = _FOOTER_BODY.pack(MAGIC, cnt, serialized_len)
+                body = _FOOTER_BODY.pack(MAGIC, count, data_len)
             else:
                 index_block = b"".join(index_entries)
                 f.write(index_block)
-                body = _FOOTER_V3_BODY.pack(MAGIC_V3, cnt, serialized_len, len(index_block), index_interval, zlib.crc32(index_block))
+                if bits is None:
+                    body = _FOOTER_V3_BODY.pack(MAGIC_V3, count, data_len, len(index_block), index_interval, zlib.crc32(index_block))
+                else:
+                    filter_block = bytes(bits)
+                    f.write(filter_block)
+                    body = _FOOTER_V4_BODY.pack(MAGIC_V4, count, data_len, len(index_block), index_interval,
+                                                zlib.crc32(index_block), len(filter_block), k,
+                                                zlib.crc32(filter_block))
             f.write(body + struct.pack(">I", zlib.crc32(body)))
             f.flush()
             os.fsync(f.fileno())
@@ -91,26 +133,36 @@ class _Bounded:
 
 
 class SSTable:
-    # TODO whole sparse index of every table sits in memory, RAM grows with the number of tables. fine for now
+    # TODO: index + bloom filter of every table live in memory (~10 bits/key for the filter), grows with total keys on disk
+    # TODO bits-per-key hardcoded to 10, never tuned against the false positive rate
 
     def __init__(self, path):
         self.path = path
         size = os.path.getsize(path)
         if size < FOOTER_SIZE:
             raise CorruptionError(f"{path}: too short to contain a footer")
+        self._bloom = None
+        self.num_hashes = 0
+        self.filter_len = 0
+        self.index_len = 0
         with open(path, "rb") as f:
-            f.seek(size - FOOTER_SIZE)
-            tail = f.read(FOOTER_SIZE)
-            if tail[:8] == MAGIC:
-                self._open_v2(size, tail)
-            else:
-                self._open_v3(f, size)
+            # only trust a format if magic AND footer crc both match (a user key could end in bytes that look like a magic)
+            for footer_size, magic, opener in ((FOOTER_V4_SIZE, MAGIC_V4, self._open_v4),
+                                               (FOOTER_SIZE, MAGIC, self._open_v2),
+                                               (FOOTER_V3_SIZE, MAGIC_V3, self._open_v3)):
+                if size < footer_size:
+                    continue
+                f.seek(size - footer_size)
+                footer = f.read(footer_size)
+                if footer[:8] == magic:
+                    stored_crc = struct.unpack(">I", footer[-4:])[0]
+                    if zlib.crc32(footer[:-4]) == stored_crc:
+                        opener(f, size, footer)
+                        return
+        raise CorruptionError(f"{path}: invalid footer")
 
-    def _open_v2(self, size, footer):
+    def _open_v2(self, f, size, footer):
         magic, count, data_len = _FOOTER_BODY.unpack(footer[:-4])
-        (crc,) = struct.unpack(">I", footer[-4:])
-        if zlib.crc32(footer[:-4]) != crc:
-            raise CorruptionError(f"{self.path}: invalid footer")
         if count == 0 or data_len != size - FOOTER_SIZE:
             raise CorruptionError(f"{self.path}: footer disagrees with file size")
         self.count = count
@@ -119,18 +171,32 @@ class SSTable:
         self._keys = []
         self._offsets = []
 
-    def _open_v3(self, f, size):
-        path = self.path
-        if size < FOOTER_V3_SIZE:
-            raise CorruptionError(f"{path}: invalid footer")
-        f.seek(size - FOOTER_V3_SIZE)
-        footer = f.read(FOOTER_V3_SIZE)
+    def _open_v3(self, f, size, footer):
         magic, count, data_len, index_len, interval, index_crc = _FOOTER_V3_BODY.unpack(footer[:-4])
-        (crc,) = struct.unpack(">I", footer[-4:])
-        if magic != MAGIC_V3 or zlib.crc32(footer[:-4]) != crc:
-            raise CorruptionError(f"{path}: invalid footer")
         if count == 0 or interval == 0 or data_len + index_len != size - FOOTER_V3_SIZE:
+            raise CorruptionError(f"{self.path}: footer disagrees with file size")
+        self._load_index(f, count, data_len, index_len, interval, index_crc)
+
+    def _open_v4(self, f, size, footer):
+        (magic, count, data_len, index_len, interval, index_crc,
+         filter_len, k, filter_crc) = _FOOTER_V4_BODY.unpack(footer[:-4])
+        path = self.path
+        if count == 0 or interval == 0 or data_len + index_len + filter_len != size - FOOTER_V4_SIZE:
             raise CorruptionError(f"{path}: footer disagrees with file size")
+        # k has to be 1..MAX_HASHES and >= 1 bit per key, else the footer is damaged and a present key could get a bloom "no"
+        if not 1 <= k <= bloom.MAX_HASHES or filter_len * 8 < count:
+            raise CorruptionError(f"{path}: invalid Bloom filter parameters")
+        self._load_index(f, count, data_len, index_len, interval, index_crc)
+        f.seek(data_len + index_len)
+        block = f.read(filter_len)
+        if len(block) != filter_len or zlib.crc32(block) != filter_crc:
+            raise CorruptionError(f"{path}: Bloom filter block is damaged")
+        self._bloom = block
+        self.num_hashes = k
+        self.filter_len = filter_len
+
+    def _load_index(self, f, count, data_len, index_len, interval, index_crc):
+        path = self.path
         f.seek(data_len)
         block = f.read(index_len)
         if len(block) != index_len or zlib.crc32(block) != index_crc:
@@ -157,11 +223,15 @@ class SSTable:
         self.count = count
         self.data_len = data_len
         self.interval = interval
+        self.index_len = index_len
         self._keys = keys
         self._offsets = offsets
 
     def _scan(self):
-        with open(self.path, "rb") as raw:
+        rebuilt = None
+        if self._bloom is not None:
+            rebuilt = bytearray(self.filter_len)
+        with _open_table(self.path) as raw:
             n = 0
             end = 0
             prev = None
@@ -172,12 +242,16 @@ class SSTable:
                     b = n // self.interval
                     if self._offsets[b] != end or self._keys[b] != rec.key:
                         raise CorruptionError(f"{self.path}: index entry {b} does not match the record at offset {end}")
+                if rebuilt is not None:
+                    bloom.add(rebuilt, rec.key, self.num_hashes)
                 prev = rec.key
                 n += 1
                 end = rec.end_offset
                 yield rec
             if n != self.count or end != self.data_len:
                 raise CorruptionError(f"{self.path}: record region does not match footer")
+        if rebuilt is not None and bytes(rebuilt) != self._bloom:
+            raise CorruptionError(f"{self.path}: Bloom filter does not match the table's keys")
 
     def locate(self, key):
         b = bisect.bisect_right(self._keys, key) - 1
@@ -189,8 +263,13 @@ class SSTable:
             end = self.data_len
         return b, self._offsets[b], end
 
+    def may_contain(self, key):
+        return self._bloom is None or bloom.may_contain(self._bloom, key, self.num_hashes)
+
     def lookup(self, key):
-        # TODO: a key that isn't in the table still costs a block read if it's inside the key range. also reopens the file every call
+        # TODO: bloom false positive (~1% of misses at 10 bits/key) still pays a full block read. file gets reopened every call too
+        if not self.may_contain(key):
+            return NOT_FOUND
         if self.interval is None:
             records = self._scan()
         else:
@@ -214,7 +293,7 @@ class SSTable:
             next_key = self._keys[block + 1]
         else:
             next_key = None
-        with open(self.path, "rb") as raw:
+        with _open_table(self.path) as raw:
             n = 0
             pos = start
             prev = None

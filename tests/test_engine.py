@@ -229,3 +229,69 @@ def test_corrupted_sstable_footer_raises_on_open(path):
         f.write(data)
     with pytest.raises(CorruptionError):
         KVStore(path)
+
+
+def test_bloom_bits_per_key_must_be_valid(path):
+    with pytest.raises(ValueError):
+        KVStore(path, bloom_bits_per_key=0)
+    with pytest.raises(ValueError):
+        KVStore(path, bloom_bits_per_key=1000)
+
+
+def test_filter_never_hides_a_stored_key_or_a_deleted_one(path):
+    with KVStore(path, memtable_limit_bytes=300) as db:
+        for i in range(200):
+            db.put(b"key%04d" % i, b"value%04d" % i)
+        for i in range(0, 200, 5):
+            db.delete(b"key%04d" % i)
+        assert len(sstables(path)) > 2
+        for i in range(200):
+            expected = None if i % 5 == 0 else b"value%04d" % i
+            assert db.get(b"key%04d" % i) == expected
+
+
+def test_absent_keys_are_not_found(path):
+    with KVStore(path, memtable_limit_bytes=300) as db:
+        for i in range(0, 200, 2):
+            db.put(b"key%04d" % i, b"v")
+        for i in range(1, 200, 2):
+            assert db.get(b"key%04d" % i) is None  # in range, but never written
+        assert db.get(b"zzz") is None
+
+
+def test_filter_rules_out_a_table_without_opening_the_file(path, monkeypatch):
+    table_path = path + "-table.sst"
+    sstable.write_sstable(table_path, [(b"key%03d" % i, b"v") for i in range(50)],
+                          index_interval=4, bloom_bits_per_key=10)
+    table = sstable.SSTable(table_path)
+    absent = [b"nope%03d" % i for i in range(100)]
+    ruled_out = [k for k in absent if not table.may_contain(k)]
+    assert len(ruled_out) > 90  # about 99% of absent keys should be rejected at 10 bits per key
+
+    def no_open(p):
+        raise AssertionError("file was opened")
+
+    monkeypatch.setattr(sstable, "_open_table", no_open)
+    for k in ruled_out:
+        assert table.lookup(k) is sstable.NOT_FOUND
+
+
+def test_table_without_a_filter_is_still_searched(path):
+    table_path = path + "-table.sst"
+    sstable.write_sstable(table_path, [(b"a", b"1"), (b"b", b"2")], index_interval=4)  # index only, no filter
+    table = sstable.SSTable(table_path)
+    assert table.may_contain(b"anything")
+    assert table.lookup(b"b") == b"2"
+
+
+def test_corrupted_filter_block_raises_on_open(path):
+    with KVStore(path) as db:
+        db.put(b"a", b"1")
+        db.flush()
+    table = sstables(path)[0]
+    data = bytearray(open(table, "rb").read())
+    data[-61] ^= 0xFF  # the last byte of the filter block, just before the 60-byte footer
+    with open(table, "wb") as f:
+        f.write(data)
+    with pytest.raises(CorruptionError):
+        KVStore(path)

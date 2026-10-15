@@ -28,6 +28,8 @@ The API, record format, invariants, durability policy and known limitations are 
 
 **V3 is implemented** as `KVStore`, which adds a sparse index inside each SSTable: one entry (first key and file offset) per 16 records by default. A lookup binary-searches the in-memory index, then reads and scans only the selected block of the table instead of the whole file. Everything else (WAL, memtable, synchronous flush, recovery) is V2's, and V2 tables are still readable. See [docs/v3-design.md](docs/v3-design.md). V3's measured behavior against V2 (GET latency, records decoded per GET, open time, memory, index size, write cost) is in [docs/benchmarks.md](docs/benchmarks.md#v3-benchmark).
 
+**V4 is implemented** as `KVStore`, which adds a Bloom filter to each SSTable (10 bits per key and 7 hashes by default, about 0.8% expected false positives). A lookup asks the table's filter first and skips the table without any file access when the key is definitely absent. Otherwise it uses V3's sparse index and bounded block scan. Tombstone keys are in the filter too. V2 and V3 tables are still readable (they have no filter and are always searched). See [docs/v4-design.md](docs/v4-design.md). V4 has not been benchmarked yet.
+
 ## Architecture roadmap
 
 Versions so far. Each step gets benchmarked against the one before it.
@@ -38,6 +40,7 @@ Versions so far. Each step gets benchmarked against the one before it.
 | V1 | write-ahead log + memtable | implemented, benchmarked |
 | V2 | SSTables | implemented, benchmarked |
 | V3 | sparse index | implemented, benchmarked |
+| V4 | Bloom filters | implemented (not yet benchmarked) |
 
 ## Performance methodology
 
@@ -72,7 +75,7 @@ pytest                                # run the tests
 
 ## Repository layout
 
-- `src/lsm_store/`: the storage engine (`record.py`: record format; `wal.py`: write-ahead log; `sstable.py`: SSTable format; `fsutil.py`: directory fsync helper; `store.py`: `KVStore`)
+- `src/lsm_store/`: the storage engine (`record.py`: record format; `wal.py`: write-ahead log; `sstable.py`: SSTable format; `bloom.py`: Bloom filter primitives; `fsutil.py`: directory fsync helper; `store.py`: `KVStore`)
 - `tests/`: correctness tests
 - `benchmarks/`: benchmark scripts and result JSON
 - `docs/`: design and benchmark documentation

@@ -1,7 +1,7 @@
 import os
 import re
 
-from . import sstable
+from . import bloom, sstable
 from .fsutil import fsync_dir
 from .record import OP_DELETE, OP_PUT, CorruptionError, read_records
 from .sstable import NOT_FOUND, SSTable
@@ -9,6 +9,7 @@ from .wal import WriteAheadLog, replay
 
 DEFAULT_MEMTABLE_LIMIT_BYTES = 4 * 1024 * 1024
 DEFAULT_INDEX_INTERVAL = 16  # records per index block
+DEFAULT_BLOOM_BITS_PER_KEY = bloom.DEFAULT_BITS_PER_KEY  # 10 bits/key, 7 hashes, ~0.8% false positives
 
 _WAL_RE = re.compile(r"^wal-(\d{8})\.log$")
 _SST_RE = re.compile(r"^sst-(\d{8})\.sst$")
@@ -21,17 +22,22 @@ def _entry_size(key, value):
 
 
 class KVStore:
-    # TODO _sstables only ever grows and get() checks every table newest -> oldest, so reads get slower the more tables pile up
+    # TODO: _sstables only grows and get() walks every table newest to oldest, reads degrade as tables pile up
     # TODO memtable limit is key+value bytes only, dict overhead isn't counted so real mem use is a few x the limit
-    # TODO index_interval hardcoded to 16, never tuned (bigger = smaller index but longer scans)
+    # TODO: index_interval is fixed at 16, never tuned. bigger interval = smaller index, more records scanned per lookup
+    # TODO: filters only help for keys missing from a table, a present key still needs a block read. no range scan at all
 
     def __init__(self, path, sync=True, memtable_limit_bytes=DEFAULT_MEMTABLE_LIMIT_BYTES,
-                 index_interval=DEFAULT_INDEX_INTERVAL):
+                 index_interval=DEFAULT_INDEX_INTERVAL, bloom_bits_per_key=DEFAULT_BLOOM_BITS_PER_KEY):
         if not isinstance(memtable_limit_bytes, int) or memtable_limit_bytes < 1:
             raise ValueError("memtable_limit_bytes must be a positive integer")
         if not isinstance(index_interval, int) or isinstance(index_interval, bool) or index_interval < 1:
             raise ValueError("index_interval must be a positive integer")
+        if (not isinstance(bloom_bits_per_key, int) or isinstance(bloom_bits_per_key, bool)
+                or not 1 <= bloom_bits_per_key <= bloom.MAX_BITS_PER_KEY):
+            raise ValueError(f"bloom_bits_per_key must be an integer in 1..{bloom.MAX_BITS_PER_KEY}")
         self._index_interval = index_interval
+        self._bloom_bits_per_key = bloom_bits_per_key
         self._dir = path
         self._sync = sync
         self._limit = memtable_limit_bytes
@@ -68,8 +74,6 @@ class KVStore:
     def put(self, key, value):
         self._check_bytes(key, value)
         self._check_open()
-
-
         # flush runs inline when the memtable is full, so this put() eats the whole sstable write + fsync. bg thread someday
         self._flush_if_full()  # flush first so a failed flush can't leave a half applied put
         self._wal.append(OP_PUT, key, value)  # may raise: memtable untouched
@@ -99,7 +103,8 @@ class KVStore:
             return
         # 1. write the sst. nothing changed until the rename in write_sstable returns, wal still has everything
         sst_path = self._sst_path(self._take_id())
-        sstable.write_sstable(sst_path, sorted(self._memtable.items()), index_interval=self._index_interval)
+        sstable.write_sstable(sst_path, sorted(self._memtable.items()), index_interval=self._index_interval,
+                              bloom_bits_per_key=self._bloom_bits_per_key)
         self._sstables.append(SSTable(sst_path))
         # 2. sst covers the memtable now, new wal segment
         new_id = self._take_id()
@@ -110,6 +115,8 @@ class KVStore:
         self._wal_id = new_id
         self._memtable = {}
         self._mem_bytes = 0
+
+
         # 3. old wal segs are redundant now, delete oldest first
         old_wal.close()
         self._delete_segments_before(new_id)
@@ -142,38 +149,38 @@ class KVStore:
                 os.remove(self._wal_path(old_id))
 
     def _replay_segments(self, wal_ids):
-        kv_map = {}
+        memtable = {}
         for i in range(len(wal_ids)):
             path = self._wal_path(wal_ids[i])
             if i == len(wal_ids) - 1:
-                kv_map.update(replay(path))  # newest segment: repair a torn tail like V1
+                memtable.update(replay(path))  # newest segment: repair a torn tail like V1
             else:
-                kv_map.update(self._replay_closed_segment(path))
-        return kv_map
+                memtable.update(self._replay_closed_segment(path))
+        return memtable
 
     def _replay_closed_segment(self, path):
         # closed segs were fsynced before the next one existed, so they have to be complete. torn tail == real corruption
-        kv_map = {}
-        good_end = 0
+        memtable = {}
+        valid_end = 0
         with open(path, "rb") as f:
-            for r in read_records(f):
-                if r.op == OP_PUT:
-                    kv_map[r.key] = r.value
+            for rec in read_records(f):
+                if rec.op == OP_PUT:
+                    memtable[rec.key] = rec.value
                 else:
-                    kv_map[r.key] = None
-                good_end = r.end_offset
-        if good_end != os.path.getsize(path):
+                    memtable[rec.key] = None
+                valid_end = rec.end_offset
+        if valid_end != os.path.getsize(path):
             raise CorruptionError(f"{path}: truncated record in a non-final WAL segment")
-        return kv_map
+        return memtable
 
     def _ids(self, pattern):
-        found = []
+        ids = []
         for name in os.listdir(self._dir):
-            mm = pattern.match(name)
-            if mm:
-                found.append(int(mm.group(1)))
-        found.sort()
-        return found
+            m = pattern.match(name)
+            if m:
+                ids.append(int(m.group(1)))
+        ids.sort()
+        return ids
 
     def _take_id(self):
         curr_id = self._next_id
