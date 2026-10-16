@@ -1,24 +1,28 @@
-"""V3 benchmark: V2 plus a sparse index in every SSTable (default interval 16). Methodology: docs/benchmarks.md.
+"""V4 benchmark: V3 plus a Bloom filter in every SSTable (10 bits per key, 7 hashes). Methodology: docs/benchmarks.md.
 
 Usage:
     python benchmarks/bench.py --scales 10000 --out PATH       # scaling runs for the listed scales
     python benchmarks/bench.py --baseline --out PATH           # 10,000-key head-to-head workloads
     python benchmarks/bench.py --analyze-only --out FINAL.json
 
-The protocol is V2's (py): same seed, keys, values, workloads, scale ladder, run counts, GET sample counts,
-4 MiB memtable limit, timing boundary (only the store call is timed, one perf_counter_ns pair per operation) and
-percentile code. Only the store under test changes (KVStore with its default index interval of 16). The V0, V1 and
-V2 results (benchmarks/results/*.json) are read, never written. All numbers are WARM OS-CACHE numbers.
+The protocol is V3's (py, which is V2's): same seed, keys, values, workloads, scale ladder, run counts, GET
+sample counts, 4 MiB memtable limit, timing boundary (only the store call is timed, one perf_counter_ns pair per
+operation) and percentile code. Only the store under test changes (KVStore with its defaults: sparse index interval
+16, 10 Bloom bits per key, 7 hashes). The V0..V3 results (benchmarks/results/*.json) are read, never written.
+All numbers are WARM OS-CACHE numbers.
 
 No production code is changed. Flush boundaries are observed by wrapping the instance's `flush` method and the
-module-level `lsm_store.sstable.write_sstable` (the V3 store calls it through that module). Read work is counted
-untimed by wrapping `SSTable.lookup`, `SSTable.locate`, `SSTable._scan_block` and the record reader. After every timed
-phase of a run (so that nothing timed is affected) an untimed pass decomposes the cost of one table lookup and
-measures the index's retained memory.
+module-level `lsm_store.sstable.write_sstable`. Read work is counted untimed by wrapping `SSTable.lookup`,
+`SSTable.may_contain`, `SSTable.locate`, `SSTable._scan_block`, `sstable._open_table` and the record reader. After the
+timed phases of a run (so that nothing timed is affected) untimed passes decompose the cost of one table lookup
+(Bloom check, index search, file open, block read), validate the Bloom invariant on every table, probe the false-positive
+rate with keys known to be absent, and measure the filters' retained memory.
 """
+
 
 import argparse
 import gc
+import hashlib
 import json
 import math
 import os
@@ -31,15 +35,17 @@ import sys
 import tempfile
 import time
 import tracemalloc
+import zlib
 from array import array
 from pathlib import Path
 
 import lsm_store.sstable as sstable_module
-from lsm_store import KVStore
+from lsm_store import KVStore, bloom
 from lsm_store.record import HEADER_SIZE
-from lsm_store.sstable import FOOTER_SIZE, FOOTER_V3_SIZE, SSTable
+from lsm_store.sstable import FOOTER_V4_SIZE, NOT_FOUND, SSTable
 from lsm_store.store import DEFAULT_MEMTABLE_LIMIT_BYTES
 from lsm_store.store import DEFAULT_INDEX_INTERVAL
+from lsm_store.store import DEFAULT_BLOOM_BITS_PER_KEY
 from lsm_store.wal import replay
 
 # ---- helpers (the same ones the earlier stages used) ------------------------
@@ -214,7 +220,6 @@ def process_memory():
 GET_HITS = {10_000: 100_000, 100_000: 5_000, 1_000_000: 2_000, 5_000_000: 1_000, 10_000_000: 1_000}
 GET_MISSES = {10_000: 100_000, 100_000: 200, 1_000_000: 100, 5_000_000: 50, 10_000_000: 50}
 STRUCT_HITS = 200  # untimed instrumented GETs per run that count tables consulted / records / bytes examined
-STRUCT_MISSES = 3
 VERIFY_SAMPLE = 200  # untimed spot checks of hit keys after the final reopen
 BASELINE_RUNS = 5
 SMALL_LIMIT_BYTES = 16 * 1024  # baseline variant in which a 10,000-key database is spread over many SSTables
@@ -361,9 +366,7 @@ def fit(n, size, values):
             "linear_per_record": b, "linear_r2": r2, "ratio_largest_over_smallest": values[-1] / values[0],
             "records_ratio": n[-1] / n[0]}
 
-# ---- protocol: identical to V2's (py), which in turn reuses V0's ladder -----------------------------------
-SCALES = list(V0_SCALES)
-RESULTS = ROOT / "benchmarks/results"
+
 INDEX_ENTRY_BYTES = 4 + 8 + len(key_of(0))  # key_len(4) + offset(8) + key(11) = 23
 DECOMP_REPS_MISS = 20  # repetitions of the per-table cost decomposition over all tables (miss key)
 DECOMP_REPS_HIT = 10  # repetitions over the sampled (table, hit key) pairs
@@ -379,28 +382,140 @@ def index_bytes(count, interval=DEFAULT_INDEX_INTERVAL):
     return index_entries(count, interval) * INDEX_ENTRY_BYTES
 
 
-def table_index_bytes(table):
-    """Index block length read from the file itself: whatever lies between the records and the footer."""
-    return os.path.getsize(table.path) - table.data_len - FOOTER_V3_SIZE
+def pct_change(new, old):
+    return (new / old - 1) * 100
+
+
+def percentile_nearest_rank(sorted_vals, q):
+    return sorted_vals[max(0, math.ceil(q * len(sorted_vals)) - 1)]
+
+
+def dist(vals):
+    s = sorted(vals)
+    return {"n": len(s), "mean": statistics.fmean(s), "median": statistics.median(s),
+            "p95": percentile_nearest_rank(s, 0.95), "max": s[-1], "min": s[0]}
+
+
+def write_row(s):
+    """Write-side summary of one scale entry (works on V2 and V3 result entries: same layout)."""
+    sp = s["put_load_split_aggregate"]
+    runs = s["runs"]
+    flushes = [f for r in runs for f in r["flushes"]["put_load"]]
+    trig = s["pooled_all_runs"]["put_load_flush_trigger"]
+    row = {
+        "records": s["records"],
+        "flushes_per_run": [len(r["flushes"]["put_load"]) for r in runs],
+        "all_p50_p95_p99_us": [sp["all"][m]["median"] for m in ("p50_us", "p95_us", "p99_us")],
+        "non_flush_p50_p95_p99_us": [sp["non_flush"][m]["median"] for m in ("p50_us", "p95_us", "p99_us")],
+        "throughput_ops_per_s": sp["all"]["throughput_ops_per_s"]["median"],
+        "max_write_ms_median_over_runs": statistics.median(r["put_load_max_ns"] for r in runs) / 1e6,
+    }
+    if trig:
+        row["flush_trigger_p50_p95_p99_max_us"] = [trig[m] for m in ("p50_us", "p95_us", "p99_us", "max_us")]
+        row["flush_trigger_ops_pooled"] = trig["ops"]
+        row["flush_ns_p50_p95_max_ms"] = [
+            x / 1e6 for x in (statistics.median(f["flush_ns"] for f in flushes),
+                              sorted(f["flush_ns"] for f in flushes)[int(0.95 * len(flushes))],
+                              max(f["flush_ns"] for f in flushes))]
+        row["write_sstable_ms_median"] = statistics.median(f["write_sstable_ns"] for f in flushes) / 1e6
+        row["flush_outside_write_sstable_ms_median"] = statistics.median(
+            f["flush_ns"] - f["write_sstable_ns"] for f in flushes) / 1e6
+        row["write_sstable_share_of_flush_median"] = statistics.median(f["write_sstable_ns"] / f["flush_ns"]
+                                                                       for f in flushes)
+        row["amortized_flush_us_per_put"] = statistics.median(
+            sum(f["flush_ns"] for f in r["flushes"]["put_load"]) for r in runs) / s["records"] / 1e3
+        row["table_bytes"] = runs[0]["flushes"]["put_load"][0]["table_bytes"]
+    return row
+
+
+def percentile_nearest_rank(sorted_vals, q):
+    return sorted_vals[max(0, math.ceil(q * len(sorted_vals)) - 1)]
+
+
+def dist(vals):
+    s = sorted(vals)
+    return {"n": len(s), "mean": statistics.fmean(s), "median": statistics.median(s),
+            "p95": percentile_nearest_rank(s, 0.95), "max": s[-1], "min": s[0]}
+
+
+def v3_read_work_summary(sc):
+    """V3 work per GET by category, over the instrumented sample GETs of all runs at a scale. Row layout:
+    [category, tables_consulted, tables_skipped_by_index, blocks_read, records_decoded, bytes_decoded]."""
+    groups = {}
+    for run in sc["runs"]:
+        for kind in ("hit", "miss"):
+            for row in run["read_work"][kind]:
+                groups.setdefault(row[0], []).append(row)
+                if kind == "hit":
+                    groups.setdefault("all_hits", []).append(row)
+    names = ("tables_consulted", "tables_skipped_by_index", "blocks_read", "records_decoded", "bytes_decoded")
+    return {cat: {"gets": len(rows), **{name: dist([r[i + 1] for r in rows]) for i, name in enumerate(names)}}
+            for cat, rows in groups.items()}
+
+# ---- protocol: identical to V3's, which reuses V2's and V0's ladder ------------------------------------------------
+SCALES = list(V0_SCALES)
+RESULTS = ROOT / "benchmarks/results"
+BITS_PER_KEY = DEFAULT_BLOOM_BITS_PER_KEY  # 10
+NUM_HASHES = bloom.num_hashes(BITS_PER_KEY)  # 7
+STRUCT_MISSES_V4 = 50  # instrumented miss GETs per run (V3 instrumented 3: a V3 miss decodes thousands of records)
+FPR_MIN_KEYS = 20_000  # absent probe keys per table, raised so that every scale has at least FPR_MIN_CHECKS checks
+FPR_MIN_CHECKS = 1_000_000
+FP_PAIRS = 200  # (table, absent key) pairs whose Bloom answer is "maybe", used for the false-positive cost
+HASH_REPS = 20
+BUILD_REPS = 3
+WORK_FIELDS = ("tables_consulted", "bloom_checks", "bloom_negative", "bloom_maybe", "false_positives",
+               "fp_without_file_access", "index_lookups", "index_rule_outs", "tables_opened", "blocks_scanned",
+               "records_decoded", "bytes_decoded")
+
+
+def probe_key(i):
+    """An 11-byte key that is in no table: stored keys are b"key%08d"; these sort above every one of them, so a
+    "maybe" answer on one leads to the table's last block (the same position the V3/V4 miss workload reads)."""
+    return b"zzz%08d" % i
+
+
+def fpr_keys_per_table(tables):
+    return max(FPR_MIN_KEYS, -(-FPR_MIN_CHECKS // max(1, tables)))
+
+
+def table_filter_bytes(count):
+    return bloom.filter_bytes(count, BITS_PER_KEY)
+
+
+def table_file_bytes(count, interval=DEFAULT_INDEX_INTERVAL):
+    """Bytes of a V4 table of `count` 124-byte PUT records with 11-byte keys."""
+    return count * PUT_RECORD_BYTES + index_bytes(count, interval) + table_filter_bytes(count) + FOOTER_V4_SIZE
+
+
+def wilson(successes, n, z=1.96):
+    """95% Wilson interval for a binomial proportion. Treats the checks as independent trials, which they are only
+    approximately (the same filter answers many probes), so it is a guide to precision, not an exact bound."""
+    if n == 0:
+        return [None, None]
+    p = successes / n
+    d = 1 + z * z / n
+    c = p + z * z / (2 * n)
+    h = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n))
+    return [(c - h) / d, (c + h) / d]
 
 
 # ---- flush instrumentation (no production code changed) ----------------------------------------
 class FlushProbe:
-    """Observes the flushes of one KVStore instance by wrapping `db.flush` (the instance attribute that
-    `_flush_if_full` calls) and `lsm_store.sstable.write_sstable` (called by `KVStore._write_table` through the
-    module). Records the index interval each flush's table was written with. `last` is set while an operation
-    flushes and cleared by the caller before each operation."""
+    """Observes the flushes of one KVStore instance by wrapping `db.flush` and `lsm_store.sstable.write_sstable`
+    (called by `KVStore._write_table` through the module). Records the index interval and Bloom bits per key each
+    flush's table was written with. `last` is set while an operation flushes and cleared by the caller before each
+    operation."""
 
     def __init__(self, db):
         self.db = db
         self.last = None
         self._write_ns = 0
-        self._interval = None
+        self._kwargs = {}
         self._real_write = sstable_module.write_sstable
 
         def write_wrapper(path, items, **kwargs):
             t0 = time.perf_counter_ns()
-            self._interval = kwargs.get("index_interval")
+            self._kwargs = kwargs
             try:
                 return self._real_write(path, items, **kwargs)
             finally:
@@ -410,7 +525,7 @@ class FlushProbe:
 
         def flush_wrapper():
             self._write_ns = 0
-            self._interval = None
+            self._kwargs = {}
             entries, mem_bytes = len(db._memtable), db._mem_bytes
             t0 = time.perf_counter_ns()
             try:
@@ -418,7 +533,8 @@ class FlushProbe:
             finally:
                 self.last = {"flush_ns": time.perf_counter_ns() - t0, "write_sstable_ns": self._write_ns,
                              "memtable_entries": entries, "memtable_bytes": mem_bytes,
-                             "index_interval": self._interval}
+                             "index_interval": self._kwargs.get("index_interval"),
+                             "bloom_bits_per_key": self._kwargs.get("bloom_bits_per_key")}
 
         sstable_module.write_sstable = write_wrapper
         db.flush = flush_wrapper
@@ -430,110 +546,238 @@ class FlushProbe:
 
 # ---- read-work instrumentation (untimed) --------------------------------------------------------
 def measure_read_work(db, keys):
-    """For each key return [category, tables_consulted, tables_skipped_by_index, blocks_read, records_decoded,
-    bytes_decoded] of one GET. `tables_consulted` counts SSTable.lookup calls; `tables_skipped_by_index` those whose
-    binary search ruled the key out without any file access; `blocks_read` the table regions actually opened and
-    scanned. Records/bytes are counted in the record reader. Application-level work, not physical I/O. Untimed."""
-    work = {"tables": 0, "skipped": 0, "blocks": 0, "records": 0, "bytes": 0}
-    real_lookup, real_locate = SSTable.lookup, SSTable.locate
-    real_scan_block, real_read = SSTable._scan_block, sstable_module.read_records
+    """For each key return [category] + WORK_FIELDS of one GET.
+
+    tables_consulted   SSTable.lookup calls
+    bloom_checks       SSTable.may_contain calls; bloom_negative / bloom_maybe split them by the answer
+    false_positives    lookups whose Bloom answer was "maybe" but which returned NOT_FOUND (the key is not there)
+    fp_without_file_access  of those, the ones the sparse index then ruled out (key below the table's first key),
+                       so no file was opened
+    index_lookups      SSTable.locate calls; index_rule_outs those returning None (no candidate block)
+    tables_opened      sstable._open_table calls (= blocks read: a lookup opens its table once, for one block)
+    blocks_scanned     SSTable._scan_block calls
+    records/bytes_decoded  counted in the record reader (application-level work, not physical I/O)
+    Untimed."""
+    work = dict.fromkeys(WORK_FIELDS, 0)
+    state = {"last_maybe": None}
+    real_lookup, real_may, real_locate = SSTable.lookup, SSTable.may_contain, SSTable.locate
+    real_scan_block, real_read, real_open = SSTable._scan_block, sstable_module.read_records, sstable_module._open_table
 
     def lookup(self, key):
-        work["tables"] += 1
-        return real_lookup(self, key)
+        work["tables_consulted"] += 1
+        state["last_maybe"] = None
+        opened = work["tables_opened"]
+        found = real_lookup(self, key)
+        if state["last_maybe"] and found is NOT_FOUND:
+            work["false_positives"] += 1
+            if work["tables_opened"] == opened:
+                work["fp_without_file_access"] += 1
+        return found
+
+    def may_contain(self, key):
+        answer = real_may(self, key)
+        work["bloom_checks"] += 1
+        work["bloom_maybe" if answer else "bloom_negative"] += 1
+        state["last_maybe"] = answer
+        return answer
 
     def locate(self, key):
         found = real_locate(self, key)
+        work["index_lookups"] += 1
         if found is None:
-            work["skipped"] += 1
+            work["index_rule_outs"] += 1
         return found
 
     def scan_block(self, *args):
-        work["blocks"] += 1
+        work["blocks_scanned"] += 1
         return real_scan_block(self, *args)
+
+    def open_table(path):
+        work["tables_opened"] += 1
+        return real_open(path)
 
     def counting(f):
         for rec in real_read(f):
-            work["records"] += 1
-            work["bytes"] += HEADER_SIZE + len(rec.key) + len(rec.value)
+            work["records_decoded"] += 1
+            work["bytes_decoded"] += HEADER_SIZE + len(rec.key) + len(rec.value or b"")
             yield rec
 
     out = []
-    SSTable.lookup, SSTable.locate, SSTable._scan_block = lookup, locate, scan_block
-    sstable_module.read_records = counting
+    SSTable.lookup, SSTable.may_contain, SSTable.locate, SSTable._scan_block = lookup, may_contain, locate, scan_block
+    sstable_module.read_records, sstable_module._open_table = counting, open_table
     try:
         for key in keys:
-            work.update(tables=0, skipped=0, blocks=0, records=0, bytes=0)
+            work.update(dict.fromkeys(WORK_FIELDS, 0))
             value = db.get(key)
             if value is None:
                 cat = "miss"
-            elif work["tables"] == 0:
+            elif work["tables_consulted"] == 0:
                 cat = "memtable_hit"
-            elif work["tables"] == 1:
+            elif work["tables_consulted"] == 1:
                 cat = "newest_sstable_hit"
             else:
                 cat = "older_sstable_hit"
-            out.append([cat, work["tables"], work["skipped"], work["blocks"], work["records"], work["bytes"]])
+            out.append([cat] + [work[f] for f in WORK_FIELDS])
     finally:
-        SSTable.lookup, SSTable.locate, SSTable._scan_block = real_lookup, real_locate, real_scan_block
-        sstable_module.read_records = real_read
+        SSTable.lookup, SSTable.may_contain, SSTable.locate, SSTable._scan_block = (
+            real_lookup, real_may, real_locate, real_scan_block)
+        sstable_module.read_records, sstable_module._open_table = real_read, real_open
     return out
 
 
-# ---- untimed cost decomposition and index memory (after all timed phases of a run) -----------------------------
+# ---- untimed passes after the timed phases of a run -------------------------------------------------------------
 def _per_item_ns(total_ns, items):
     return total_ns / items
 
 
-def decompose(db, hit_idx, miss_key):
-    """Median over repetitions of the cost per table lookup, split into the pieces a V3 lookup is made of:
-    `locate` (binary search of the in-memory index), `open_close` (opening and closing the table file),
-    `block_read` (open + seek + read the located block's bytes, no decoding) and `lookup` (the full SSTable.lookup).
-    The miss key is above every stored key, so it selects the last block of every table; the hit pairs are
-    (table, key) for sampled hit keys that live in a flushed table. Batched timing (one clock pair per loop), so the
-    clock overhead is amortized. Not part of any timed phase. Returns None if there are no tables."""
-    tables = list(db._sstables)
-    if not tables:
-        return None
-    entries_per_table = tables[0].count
-    flushed = len(tables)
-
-    def measure(pairs, reps):
-        spans = [(t.path, *t.locate(k)[1:]) for t, k in pairs]
-        samples = {"locate": [], "open_close": [], "block_read": [], "lookup": []}
-        n = len(pairs)
-        for _ in range(reps):
-            t0 = time.perf_counter_ns()
+def measure_pairs(pairs, reps, file_parts):
+    """Median over repetitions of the cost per (table, key) pair of: `bloom` (SSTable.may_contain), `lookup` (the full
+    SSTable.lookup) and, if `file_parts`, `locate` (index search), `open_close` (opening and closing the table file)
+    and `block_read` (open + seek + read of the located block's bytes, no decoding). Batched timing: one clock pair per
+    loop over all pairs, so clock overhead is amortized."""
+    names = ["bloom", "lookup"] + (["locate", "open_close", "block_read"] if file_parts else [])
+    spans = [(t.path, *t.locate(k)[1:]) for t, k in pairs] if file_parts else []
+    samples = {n: [] for n in names}
+    n = len(pairs)
+    for _ in range(reps):
+        t0 = time.perf_counter_ns()
+        for t, k in pairs:
+            t.may_contain(k)
+        t1 = time.perf_counter_ns()
+        for t, k in pairs:
+            t.lookup(k)
+        t2 = time.perf_counter_ns()
+        times = [t1 - t0, t2 - t1]
+        if file_parts:
             for t, k in pairs:
                 t.locate(k)
-            t1 = time.perf_counter_ns()
+            t3 = time.perf_counter_ns()
             for path, _s, _e in spans:
                 open(path, "rb").close()
-            t2 = time.perf_counter_ns()
+            t4 = time.perf_counter_ns()
             for path, start, end in spans:
                 with open(path, "rb") as f:
                     f.seek(start)
                     f.read(end - start)
-            t3 = time.perf_counter_ns()
-            for t, k in pairs:
-                t.lookup(k)
-            t4 = time.perf_counter_ns()
-            for name, ns in zip(samples, (t1 - t0, t2 - t1, t3 - t2, t4 - t3)):
-                samples[name].append(_per_item_ns(ns, n))
-        return {"pairs": n, "reps": reps, **{f"{name}_ns_median": statistics.median(v) for name, v in samples.items()},
-                **{f"{name}_ns_min_max": [min(v), max(v)] for name, v in samples.items()}}
-
-    out = {"miss": measure([(t, miss_key) for t in tables], DECOMP_REPS_MISS)}
-    hit_pairs = [(tables[i // entries_per_table], key_of(i)) for i in hit_idx[:DECOMP_HIT_PAIRS]
-                 if i // entries_per_table < flushed and i < flushed * entries_per_table]
-    out["hit"] = measure(hit_pairs, DECOMP_REPS_HIT) if hit_pairs else None
-    return out
+            t5 = time.perf_counter_ns()
+            times += [t3 - t2, t4 - t3, t5 - t4]
+        for name, ns in zip(names, times):
+            samples[name].append(_per_item_ns(ns, n))
+    return {"pairs": n, "reps": reps, **{f"{name}_ns_median": statistics.median(v) for name, v in samples.items()},
+            **{f"{name}_ns_min_max": [min(v), max(v)] for name, v in samples.items()}}
 
 
-def index_memory(paths):
-    """Bytes of Python heap retained by opening the tables (tracemalloc, current traced size after minus before):
-    the sparse indexes plus the SSTable objects. Also the transient peak during the opens. Run after all timed
-    phases; tracemalloc is stopped again before returning."""
+def hash_cost(keys):
+    """Cost of the one BLAKE2b digest + unpack that starts every Bloom query (the first line of bloom._positions),
+    median ns per key over HASH_REPS batched repetitions."""
+    samples = []
+    for _ in range(HASH_REPS):
+        t0 = time.perf_counter_ns()
+        for k in keys:
+            bloom._HALVES.unpack(hashlib.blake2b(k, digest_size=16).digest())
+        samples.append((time.perf_counter_ns() - t0) / len(keys))
+    return {"keys": len(keys), "reps": HASH_REPS, "hash_ns_median": statistics.median(samples),
+            "hash_ns_min_max": [min(samples), max(samples)]}
+
+
+def build_cost(table):
+    """Cost of building one table's filter (what write_sstable adds per flush): bloom.add over every key of the table,
+    median over BUILD_REPS repetitions."""
+    keys = [k for k, _ in table.items()]
+    samples = []
+    for _ in range(BUILD_REPS):
+        bits = bytearray(table.filter_len)
+        t0 = time.perf_counter_ns()
+        for k in keys:
+            bloom.add(bits, k, table.num_hashes)
+        samples.append(time.perf_counter_ns() - t0)
+        assert bytes(bits) == table._bloom, "rebuilt filter differs from the stored one"
+    return {"keys": len(keys), "reps": BUILD_REPS, "build_ns_median": statistics.median(samples),
+            "build_ns_per_key_median": statistics.median(samples) / len(keys)}
+
+
+def decompose(db, n_load, hit_idx, miss_key):
+    """Per-table lookup cost over the `n_load` tables written by the load (each holds the same number of consecutive
+    keys, so key i lives in table i // entries_per_table). `miss_no`: the miss key against every table whose filter
+    says "no" (the Bloom check is the whole lookup). `hit`: sampled hit keys against the table that holds them
+    ("maybe", then index, then block). Also the cost of the hash alone and of building one filter. None if no tables."""
+    tables = list(db._sstables[:n_load])
+    if not tables:
+        return None
+    e = tables[0].count
+    no_pairs = [(t, miss_key) for t in tables if not t.may_contain(miss_key)]
+    hit_pairs = [(tables[i // e], key_of(i)) for i in hit_idx[:DECOMP_HIT_PAIRS] if i // e < n_load]
+    assert all(t.may_contain(k) for t, k in hit_pairs), "a stored key was rejected by its table's filter"
+    return {"tables": len(tables), "miss_no": measure_pairs(no_pairs, DECOMP_REPS_MISS, False) if no_pairs else None,
+            "hit": measure_pairs(hit_pairs, DECOMP_REPS_HIT, True) if hit_pairs else None,
+            "miss_no_share_of_tables": len(no_pairs) / len(tables),
+            "hash": hash_cost([key_of(i) for i in range(1000)]), "build": build_cost(tables[0])}
+
+
+def validate_blooms(db):
+    """The production Bloom invariant at scale. Flushes the memtable (so tombstones written by the delete phase are in
+    a table), then scans every table in full: `SSTable.items()` verifies every record checksum, the key order and that
+    the filter rebuilt from the keys equals the stored filter byte for byte; every key read, tombstones included,
+    must also get "maybe" from the table's own filter. Nothing here is timed."""
+    db.flush()
+    keys = tombstones = 0
+    for t in db._sstables:
+        for key, value in t.items():
+            assert t.may_contain(key), f"filter of {t.path} rejected a key it holds"
+            keys += 1
+            tombstones += value is None
+    assert tombstones > 0, "no tombstone reached a table, so the tombstone invariant was not exercised"
+    return {"tables": len(db._sstables), "keys_checked": keys, "tombstone_keys_checked": tombstones,
+            "false_negatives": 0, "stored_filters_equal_rebuilt": True}
+
+
+def fpr_probe(db):
+    """Measured false-positive rate: every table's filter queried (`SSTable.may_contain`, no file access) with
+    absent keys. `maybe` counts are false positives by construction: the probe keys are in no table. Pooled over all
+    (table, key) checks; the expected rate comes from bloom.expected_false_positive_rate for each table's own size."""
+    tables = list(db._sstables)
+    n_keys = fpr_keys_per_table(len(tables))
+    keys = [probe_key(i) for i in range(n_keys)]
+    per_table = []
+    fp_total = 0
+    t0 = time.perf_counter()
+    for t in tables:
+        mc = t.may_contain
+        fps = sum(1 for k in keys if mc(k))
+        per_table.append(fps)
+        fp_total += fps
+    checks = n_keys * len(tables)
+    expected = statistics.fmean(bloom.expected_false_positive_rate(t.count, t.filter_len, t.num_hashes) for t in tables)
+    rates = [x / n_keys for x in per_table]
+    return {"tables": len(tables), "keys_per_table": n_keys, "checks": checks, "false_positives": fp_total,
+            "measured_fpr": fp_total / checks, "wilson95": wilson(fp_total, checks), "expected_fpr": expected,
+            "per_table_fpr_min_median_max": [min(rates), statistics.median(rates), max(rates)],
+            "seconds": time.perf_counter() - t0}
+
+
+def find_fp_pairs(tables):
+    """Up to FP_PAIRS (table, absent key) pairs whose filter says "maybe", for costing a false positive."""
+    per = max(2, -(-FP_PAIRS // max(1, len(tables))))
+    pairs = []
+    for t in tables:
+        got = 0
+        for i in range(10_000):
+            k = probe_key(i)
+            if t.may_contain(k):
+                pairs.append((t, k))
+                got += 1
+                if got == per:
+                    break
+        if len(pairs) >= FP_PAIRS:
+            break
+    return pairs[:FP_PAIRS]
+
+
+def table_memory(paths):
+    """Bytes of Python heap retained by opening the tables (tracemalloc, current traced size after minus before): the
+    sparse indexes, the Bloom filter blocks and the SSTable objects. `bloom_bytes_objects` is the exact size of the
+    filter `bytes` objects (sys.getsizeof), so the rest is the index and object overhead. Run after all timed phases;
+    tracemalloc is stopped again before returning."""
     gc.collect()
     tracemalloc.start()
     base = tracemalloc.get_traced_memory()[0]
@@ -541,14 +785,18 @@ def index_memory(paths):
     current, peak = tracemalloc.get_traced_memory()
     tracemalloc.stop()
     entries = sum(len(t._keys) for t in tables)
+    bloom_bytes = sum(t.filter_len for t in tables)
+    bloom_objects = sum(sys.getsizeof(t._bloom) for t in tables)
     return {"tables": len(tables), "index_entries": entries, "retained_bytes": current - base,
-            "peak_bytes_above_base": peak - base,
-            "retained_bytes_per_entry": (current - base) / entries if entries else None}
+            "peak_bytes_above_base": peak - base, "bloom_block_bytes": bloom_bytes,
+            "bloom_bytes_objects": bloom_objects, "retained_minus_bloom_objects": current - base - bloom_objects,
+            "retained_bytes_per_index_entry_excluding_bloom": (current - base - bloom_objects) / entries
+            if entries else None}
 
 
 # ---- memory probes ---------------------------------------------------------------------------
 def memory_probe(mode, records, path, limit):
-    """Run inside a fresh process. 'load': build a V3 database of `records` keys; 'open': recover an existing one."""
+    """Run inside a fresh process. 'load': build a V4 database of `records` keys; 'open': recover an existing one."""
     gc.collect()
     before = process_memory()
     db = KVStore(path, sync=False, memtable_limit_bytes=limit)
@@ -560,6 +808,7 @@ def memory_probe(mode, records, path, limit):
     after = process_memory()
     out = {"mode": mode, "records": records, "before": before, "after": after, "tables": len(db._sstables),
            "index_entries": sum(len(t._keys) for t in db._sstables),
+           "filter_bytes": sum(t.filter_len for t in db._sstables),
            "memtable_entries": len(db._memtable), "memtable_payload_bytes": db._mem_bytes,
            "persistent": dir_state(path)}
     db.close()
@@ -579,17 +828,18 @@ def run_memory_probe(records, limit):
                    "working_set_delta": p["after"]["working_set"] - p["before"]["working_set"],
                    "peak_working_set_after": p["after"]["peak_working_set"],
                    "private_after": p["after"]["private"], "private_before": p["before"]["private"],
-                   "tables": p["tables"], "index_entries": p["index_entries"],
+                   "tables": p["tables"], "index_entries": p["index_entries"], "filter_bytes": p["filter_bytes"],
                    "memtable_entries": p["memtable_entries"],
                    "memtable_payload_bytes": p["memtable_payload_bytes"], "persistent": p["persistent"]}
             for mode, p in out.items()}
 
 
-# ---- V3 scaling run --------------------------------------------------------------------------
+# ---- V4 scaling run --------------------------------------------------------------------------
 def open_components(path):
     """Re-run the steps of KVStore.__init__ (inherited from V2) with the module's own functions to split the open
-    time. Read-only: the WAL replay of an intact newest segment truncates nothing. `index_read_io` re-reads exactly
-    the bytes SSTable() reads (28-byte probe, 44-byte footer, index block) without parsing or validating them."""
+    time. Read-only. `io_reread_ns` re-reads exactly the bytes SSTable() reads (60-byte footer, index block, filter
+    block) without parsing or validating them; `filter_crc_ns` is zlib.crc32 over the filter blocks alone (the check
+    SSTable() makes on them)."""
     t0 = time.perf_counter_ns()
     names = os.listdir(path)
     sst = sorted(n for n in names if n.startswith("sst-") and n.endswith(".sst"))
@@ -601,25 +851,28 @@ def open_components(path):
     for n in wal:
         replayed += len(replay(os.path.join(path, n)))
     t3 = time.perf_counter_ns()
-    spans = [(t.path, os.path.getsize(t.path), t.data_len, table_index_bytes(t)) for t in tables]
+    spans = [(t.path, os.path.getsize(t.path), t.data_len, t.index_len, t.filter_len) for t in tables]
     t4 = time.perf_counter_ns()
-    for p, size, data_len, ilen in spans:
+    blocks = []
+    for p, size, data_len, ilen, flen in spans:
         with open(p, "rb") as f:
-            f.seek(size - FOOTER_SIZE)
-            f.read(FOOTER_SIZE)
-            f.seek(size - FOOTER_V3_SIZE)
-            f.read(FOOTER_V3_SIZE)
+            f.seek(size - FOOTER_V4_SIZE)
+            f.read(FOOTER_V4_SIZE)
             f.seek(data_len)
             f.read(ilen)
+            blocks.append(f.read(flen))
     t5 = time.perf_counter_ns()
+    for b in blocks:
+        zlib.crc32(b)
+    t6 = time.perf_counter_ns()
     return {"list_dir_ns": t1 - t0, "sstable_open_ns": t2 - t1, "wal_replay_ns": t3 - t2,
-            "index_read_io_ns": t5 - t4, "tables": len(tables), "wal_segments": len(wal),
+            "io_reread_ns": t5 - t4, "filter_crc_ns": t6 - t5, "tables": len(tables), "wal_segments": len(wal),
             "memtable_entries_replayed": replayed, "index_bytes_read": sum(s[3] for s in spans),
             "index_entries_loaded": sum(len(t._keys) for t in tables),
-            "footer_bytes_read": len(tables) * (FOOTER_SIZE + FOOTER_V3_SIZE)}
+            "filter_bytes_read": sum(s[4] for s in spans), "footer_bytes_read": len(tables) * FOOTER_V4_SIZE}
 
 
-def v3_run(records, limit, n_hits, n_misses, v0_gets):
+def v4_run(records, limit, n_hits, n_misses, v0_gets, probe_fpr):
     value_rng, hit_idx, overwrites, miss_keys, del_keys = workload(records, n_hits, n_misses, v0_gets)
     hit_keys = [key_of(i) for i in hit_idx]
 
@@ -629,11 +882,12 @@ def v3_run(records, limit, n_hits, n_misses, v0_gets):
     raw = {}
     entries_per_table = -(-limit // ENTRY_PAYLOAD)  # ceil: flush fires on the write after the memtable reaches limit
     table_index_b = index_bytes(entries_per_table)
-    table_bytes = entries_per_table * PUT_RECORD_BYTES + table_index_b + FOOTER_V3_SIZE
+    filter_b = table_filter_bytes(entries_per_table)
+    table_bytes = table_file_bytes(entries_per_table)
     with tempfile.TemporaryDirectory() as d:
         path = os.path.join(d, "db")
         db = KVStore(path, sync=False, memtable_limit_bytes=limit)
-        assert db._index_interval == 16
+        assert db._index_interval == 16 and db._bloom_bits_per_key == BITS_PER_KEY == 10 and NUM_HASHES == 7
         probe = FlushProbe(db)
         try:
             load = WriteStats()
@@ -651,9 +905,12 @@ def v3_run(records, limit, n_hits, n_misses, v0_gets):
         # Accounting checks after the load (untimed).
         flushed_records = sum(f["table_records"] for f in load.flushes)
         assert len(db._sstables) == n_flushes_load == (records - 1) // entries_per_table
-        assert all(f["table_records"] == entries_per_table and f["index_interval"] == 16 for f in load.flushes)
+        assert all(f["table_records"] == entries_per_table and f["index_interval"] == 16
+                   and f["bloom_bits_per_key"] == BITS_PER_KEY for f in load.flushes)
         assert all(f["table_bytes"] == table_bytes for f in load.flushes)
-        assert all(t.interval == 16 and len(t._keys) == index_entries(entries_per_table) for t in db._sstables)
+        assert all(t.interval == 16 and len(t._keys) == index_entries(entries_per_table)
+                   and t._bloom is not None and t.num_hashes == NUM_HASHES and t.filter_len == filter_b
+                   and t.index_len == table_index_b for t in db._sstables), "a table lacks the expected Bloom filter"
         assert flushed_records + len(db._memtable) == records
         state_after_load = dir_state(path)
         assert state_after_load["wal_files"] == 1 and state_after_load["sst_files"] == n_flushes_load
@@ -688,7 +945,7 @@ def v3_run(records, limit, n_hits, n_misses, v0_gets):
 
         # Structural read work of a sample of GETs (untimed, instrumented).
         read_work = {"hit": measure_read_work(db, hit_keys[:STRUCT_HITS]),
-                     "miss": measure_read_work(db, miss_keys[:STRUCT_MISSES])}
+                     "miss": measure_read_work(db, miss_keys[:min(n_misses, STRUCT_MISSES_V4)])}
 
         # Overwrites, then deletes (timed). The probe is attached for the whole phase pair.
         probe = FlushProbe(db)
@@ -713,7 +970,8 @@ def v3_run(records, limit, n_hits, n_misses, v0_gets):
         state_after_deletes = dir_state(path)
         raw["put_overwrite"], raw["delete"] = over.all, dele.all
         table_list = [[t.count, os.path.getsize(t.path)] for t in db._sstables]
-        index_tables = [[len(t._keys), table_index_bytes(t)] for t in db._sstables]
+        index_tables = [[len(t._keys), t.index_len] for t in db._sstables]
+        filter_tables = [[t.num_hashes, t.filter_len] for t in db._sstables]
         final_memtable_entries = len(db._memtable)
         final_mem_bytes = db._mem_bytes
         db.close()
@@ -736,10 +994,16 @@ def v3_run(records, limit, n_hits, n_misses, v0_gets):
             assert db.get(k) == want, "state differs after reopen"
 
         # Untimed supplementary passes, after every timed phase of this run.
-        decomposition = decompose(db, hit_idx, miss_keys[0])
+        decomposition = decompose(db, n_flushes_load, hit_idx, miss_keys[0])
         sst_paths = [t.path for t in db._sstables]
+        validation = validate_blooms(db)  # flushes the memtable, then scans every table
+        fpr = fpr_probe(db) if probe_fpr else None
+        fp_cost = None
+        fp_pairs = find_fp_pairs(db._sstables)
+        if fp_pairs:
+            fp_cost = measure_pairs(fp_pairs, DECOMP_REPS_HIT, True)
         db.close()
-        memory_of_index = index_memory(sst_paths)
+        memory_of_tables = table_memory(sst_paths)
     assert not os.path.exists(d), "temp database not cleaned up"
 
     summary = {"get_hit": full_summary(raw["get_hit"]), "get_miss": full_summary(raw["get_miss"]),
@@ -755,6 +1019,8 @@ def v3_run(records, limit, n_hits, n_misses, v0_gets):
         "flushes": {"put_load": load_flushes, "put_overwrite": over.flushes, "delete": dele.flushes},
         "memtable_limit_bytes": limit,
         "index_interval": 16,
+        "bloom_bits_per_key": BITS_PER_KEY,
+        "bloom_num_hashes": NUM_HASHES,
         "entries_per_table": entries_per_table,
         "open_recovery_ns": open_ns,
         "open_components": components,
@@ -765,11 +1031,15 @@ def v3_run(records, limit, n_hits, n_misses, v0_gets):
                   "after_deletes": state_after_deletes, "final_closed": bytes_final},
         "tables_final": table_list,  # [records, bytes] per SSTable, oldest first
         "index_tables": index_tables,  # [index entries, index block bytes] per SSTable, oldest first
+        "filter_tables": filter_tables,  # [num_hashes, filter block bytes] per SSTable, oldest first
         "final_memtable_entries": final_memtable_entries,
         "final_memtable_payload_bytes": final_mem_bytes,
         "read_work": read_work,
         "decomposition": decomposition,
-        "index_memory": memory_of_index,
+        "false_positive_cost": fp_cost,
+        "bloom_validation": validation,
+        "fpr_probe": fpr,
+        "table_memory": memory_of_tables,
     }
 
 
@@ -788,7 +1058,7 @@ def baseline_run(wl, limit):
                 timed_write(db, probe, load, "put", k, v, n)
             ref.update(wl["load"])
             out["state_after_load"] = dir_state(path)
-            out["tables_after_load"] = [[t.count, len(t._keys)] for t in db._sstables]
+            out["tables_after_load"] = [[t.count, len(t._keys), t.filter_len] for t in db._sstables]
 
             def get_all(keys):
                 lats = []
@@ -861,6 +1131,7 @@ def baseline_entry(wl_args, runs, limit):
                          "n_sync_puts": wl_args[3]},
             "memtable_limit_bytes": limit,
             "index_interval": 16,
+            "bloom_bits_per_key": BITS_PER_KEY,
             "runs_completed": runs,
             "aggregate_over_runs": aggregate(res),
             "write_split_aggregate": {p: split_aggregate([{"write_split": r["write_split"]} for r in res], p)
@@ -874,27 +1145,13 @@ def baseline_entry(wl_args, runs, limit):
 
 
 # ---- analysis --------------------------------------------------------------------------------
-def v2_reference():
-    return json.loads((RESULTS / "v2_benchmark.json").read_text())
-
-
-def pct_change(new, old):
-    return (new / old - 1) * 100
-
-
-def percentile_nearest_rank(sorted_vals, q):
-    return sorted_vals[max(0, math.ceil(q * len(sorted_vals)) - 1)]
-
-
-def dist(vals):
-    s = sorted(vals)
-    return {"n": len(s), "mean": statistics.fmean(s), "median": statistics.median(s),
-            "p95": percentile_nearest_rank(s, 0.95), "max": s[-1], "min": s[0]}
+def v3_reference():
+    return json.loads((RESULTS / "v3_benchmark.json").read_text())
 
 
 def read_work_summary(sc):
-    """V3 work per GET by category, over the instrumented sample GETs of all runs at a scale. Row layout:
-    [category, tables_consulted, tables_skipped_by_index, blocks_read, records_decoded, bytes_decoded]."""
+    """V4 work per GET by category over the instrumented GETs of all runs at a scale: per field a distribution, plus
+    the Bloom totals. Row layout: [category] + WORK_FIELDS."""
     groups = {}
     for run in sc["runs"]:
         for kind in ("hit", "miss"):
@@ -902,118 +1159,96 @@ def read_work_summary(sc):
                 groups.setdefault(row[0], []).append(row)
                 if kind == "hit":
                     groups.setdefault("all_hits", []).append(row)
-    names = ("tables_consulted", "tables_skipped_by_index", "blocks_read", "records_decoded", "bytes_decoded")
-    return {cat: {"gets": len(rows), **{name: dist([r[i + 1] for r in rows]) for i, name in enumerate(names)}}
-            for cat, rows in groups.items()}
-
-
-def v2_read_work_all_hits(sc2):
-    """The same quantities for the V2 sample (rows [category, tables, records, bytes]) so V2 and V3 can be compared on
-    the identical hit keys (the first STRUCT_HITS hit keys of every run are the same keys)."""
-    rows = [r for run in sc2["runs"] for r in run["read_work"]["hit"]]
-    misses = [r for run in sc2["runs"] for r in run["read_work"]["miss"]]
-    return {"hit": {"gets": len(rows), "records": dist([r[2] for r in rows]), "bytes": dist([r[3] for r in rows]),
-                    "tables": dist([r[1] for r in rows])},
-            "miss": {"gets": len(misses), "records": dist([r[2] for r in misses]),
-                     "bytes": dist([r[3] for r in misses]), "tables": dist([r[1] for r in misses])}}
-
-
-def write_row(s):
-    """Write-side summary of one scale entry (works on V2 and V3 result entries: same layout)."""
-    sp = s["put_load_split_aggregate"]
-    runs = s["runs"]
-    flushes = [f for r in runs for f in r["flushes"]["put_load"]]
-    trig = s["pooled_all_runs"]["put_load_flush_trigger"]
-    row = {
-        "records": s["records"],
-        "flushes_per_run": [len(r["flushes"]["put_load"]) for r in runs],
-        "all_p50_p95_p99_us": [sp["all"][m]["median"] for m in ("p50_us", "p95_us", "p99_us")],
-        "non_flush_p50_p95_p99_us": [sp["non_flush"][m]["median"] for m in ("p50_us", "p95_us", "p99_us")],
-        "throughput_ops_per_s": sp["all"]["throughput_ops_per_s"]["median"],
-        "max_write_ms_median_over_runs": statistics.median(r["put_load_max_ns"] for r in runs) / 1e6,
-    }
-    if trig:
-        row["flush_trigger_p50_p95_p99_max_us"] = [trig[m] for m in ("p50_us", "p95_us", "p99_us", "max_us")]
-        row["flush_trigger_ops_pooled"] = trig["ops"]
-        row["flush_ns_p50_p95_max_ms"] = [
-            x / 1e6 for x in (statistics.median(f["flush_ns"] for f in flushes),
-                              sorted(f["flush_ns"] for f in flushes)[int(0.95 * len(flushes))],
-                              max(f["flush_ns"] for f in flushes))]
-        row["write_sstable_ms_median"] = statistics.median(f["write_sstable_ns"] for f in flushes) / 1e6
-        row["flush_outside_write_sstable_ms_median"] = statistics.median(
-            f["flush_ns"] - f["write_sstable_ns"] for f in flushes) / 1e6
-        row["write_sstable_share_of_flush_median"] = statistics.median(f["write_sstable_ns"] / f["flush_ns"]
-                                                                       for f in flushes)
-        row["amortized_flush_us_per_put"] = statistics.median(
-            sum(f["flush_ns"] for f in r["flushes"]["put_load"]) for r in runs) / s["records"] / 1e3
-        row["table_bytes"] = runs[0]["flushes"]["put_load"][0]["table_bytes"]
-    return row
+    out = {}
+    for cat, rows in groups.items():
+        entry = {"gets": len(rows), **{name: dist([r[i + 1] for r in rows]) for i, name in enumerate(WORK_FIELDS)}}
+        totals = {name: sum(r[i + 1] for r in rows) for i, name in enumerate(WORK_FIELDS)}
+        # A GET that was answered by a table has exactly one table that holds the key: its "maybe" is a true positive.
+        true_positive_checks = sum(1 for r in rows if r[0] != "miss" and r[0] != "memtable_hit")
+        absent_checks = totals["bloom_checks"] - true_positive_checks
+        entry["totals"] = totals
+        entry["true_positive_checks"] = true_positive_checks
+        entry["absent_key_checks"] = absent_checks
+        entry["skip_rate"] = totals["bloom_negative"] / totals["bloom_checks"] if totals["bloom_checks"] else None
+        entry["false_positive_rate_on_absent_checks"] = (totals["false_positives"] / absent_checks
+                                                         if absent_checks else None)
+        out[cat] = entry
+    return out
 
 
 def analyze(result):
-    v2 = v2_reference()
+    v3 = v3_reference()
     sc = [result["scales"][k] for k in sorted(result["scales"], key=int)
           if result["scales"][k]["runs_completed"] == result["scales"][k]["runs_planned"]]
     out = {"scales_used": [s["records"] for s in sc]}
     if len(sc) < 2:
         return out
     n = [s["records"] for s in sc]
-    s2 = [v2["scales"][str(r)] for r in n]
+    s3 = [v3["scales"][str(r)] for r in n]
     tables = [s["runs"][0]["state"]["after_load"]["sst_files"] for s in sc]
-    assert tables == [e["runs"][0]["state"]["after_load"]["sst_files"] for e in s2], "table layout differs from V2"
+    assert tables == [e["runs"][0]["state"]["after_load"]["sst_files"] for e in s3], "table layout differs from V3"
     out["sstables_after_load"] = tables
 
-    # ---- GET latency, V3 vs V2 ----
+    # ---- GET latency, V4 vs V3 ----
     for kind in ("get_hit", "get_miss"):
         for p in ("p50_us", "p95_us", "p99_us", "mean_us"):
             a = [s["pooled_all_runs"][kind][p] for s in sc]
-            b = [e["pooled_all_runs"][kind][p] for e in s2]
-            out[f"{kind}_{p}"] = {"v3_us": a, "v2_us": b, "v3_over_v2": [x / y for x, y in zip(a, b)],
-                                  "v2_over_v3": [y / x for x, y in zip(a, b)],
+            b = [e["pooled_all_runs"][kind][p] for e in s3]
+            out[f"{kind}_{p}"] = {"v4_us": a, "v3_us": b, "v4_over_v3": [x / y for x, y in zip(a, b)],
+                                  "v3_over_v4": [y / x for x, y in zip(a, b)],
                                   "change_percent": [pct_change(x, y) for x, y in zip(a, b)]}
-        # Medians of per-run medians, to show how much the run medians differ (not a noise-floor claim).
         out[f"{kind}_p50_run_medians_us"] = {
-            "v3": [[r["summary"][kind]["p50_us"] for r in s["runs"]] for s in sc],
-            "v2": [[r["summary"][kind]["p50_us"] for r in e["runs"]] for e in s2]}
+            "v4": [[r["summary"][kind]["p50_us"] for r in s["runs"]] for s in sc],
+            "v3": [[r["summary"][kind]["p50_us"] for r in e["runs"]] for e in s3]}
         spread = lambda m: (m["max"] - m["min"]) / m["median"]  # noqa: E731
         out[f"{kind}_p50_between_run_spread"] = {
-            "v3": [spread(s["aggregate_over_runs"][kind]["p50_us"]) for s in sc],
-            "v2": [spread(e["aggregate_over_runs"][kind]["p50_us"]) for e in s2]}
+            "v4": [spread(s["aggregate_over_runs"][kind]["p50_us"]) for s in sc],
+            "v3": [spread(e["aggregate_over_runs"][kind]["p50_us"]) for e in s3]}
         withtab = [i for i, t in enumerate(tables) if t > 0]
         if len(withtab) >= 2:
+            v4p50 = out[f"{kind}_p50_us"]["v4_us"]
             v3p50 = out[f"{kind}_p50_us"]["v3_us"]
-            v2p50 = out[f"{kind}_p50_us"]["v2_us"]
             nn = [n[i] for i in withtab]
             tt = [tables[i] for i in withtab]
+            out[f"{kind}_p50_v4_fit_vs_records"] = fit(nn, nn, [v4p50[i] for i in withtab])
             out[f"{kind}_p50_v3_fit_vs_records"] = fit(nn, nn, [v3p50[i] for i in withtab])
-            out[f"{kind}_p50_v2_fit_vs_records"] = fit(nn, nn, [v2p50[i] for i in withtab])
+            out[f"{kind}_p50_v4_fit_vs_sstables"] = fit(tt, tt, [v4p50[i] for i in withtab])
             out[f"{kind}_p50_v3_fit_vs_sstables"] = fit(tt, tt, [v3p50[i] for i in withtab])
-            out[f"{kind}_p50_per_sstable_us"] = {"v3": [v3p50[i] / tables[i] for i in withtab],
-                                                 "v2": [v2p50[i] / tables[i] for i in withtab],
+            out[f"{kind}_p50_per_sstable_us"] = {"v4": [v4p50[i] / tables[i] for i in withtab],
+                                                 "v3": [v3p50[i] / tables[i] for i in withtab],
                                                  "scales": nn}
     out["get_samples_pooled"] = {"hit": [s["pooled_all_runs"]["get_hit"]["ops"] for s in sc],
                                  "miss": [s["pooled_all_runs"]["get_miss"]["ops"] for s in sc]}
 
-    # ---- structural read work (instrumented sample), V3 vs V2 ----
-    out["read_work_v3"] = [read_work_summary(s) for s in sc]
-    out["read_work_v2"] = [v2_read_work_all_hits(e) for e in s2]
-    red = []
-    for w3, w2 in zip(out["read_work_v3"], out["read_work_v2"]):
+    # ---- structural read work (instrumented sample), V4 vs V3 ----
+    out["read_work_v4"] = [read_work_summary(s) for s in sc]
+    out["read_work_v3"] = [v3_read_work_summary(e) for e in s3]
+    cmp_rows = []
+    for w4, w3 in zip(out["read_work_v4"], out["read_work_v3"]):
         row = {}
-        for kind, key3 in (("hit", "all_hits"), ("miss", "miss")):
-            if key3 not in w3 or w2[kind]["records"]["mean"] == 0:
+        for kind, key in (("hit", "all_hits"), ("miss", "miss")):
+            if key not in w4 or key not in w3:
                 row[kind] = None
                 continue
-            r3, b3 = w3[key3]["records_decoded"]["mean"], w3[key3]["bytes_decoded"]["mean"]
-            row[kind] = {"records_v2_over_v3": w2[kind]["records"]["mean"] / r3 if r3 else None,
-                         "bytes_v2_over_v3": w2[kind]["bytes"]["mean"] / b3 if b3 else None,
-                         "records_v2_mean": w2[kind]["records"]["mean"], "records_v3_mean": r3,
-                         "bytes_v2_mean": w2[kind]["bytes"]["mean"], "bytes_v3_mean": b3,
-                         "tables_v2_mean": w2[kind]["tables"]["mean"],
-                         "tables_v3_mean": w3[key3]["tables_consulted"]["mean"],
-                         "blocks_read_v3_mean": w3[key3]["blocks_read"]["mean"]}
-        red.append(row)
-    out["read_work_reduction"] = red
+            a, b = w4[key], w3[key]
+            row[kind] = {
+                "tables_consulted_v4": a["tables_consulted"]["mean"], "tables_consulted_v3": b["tables_consulted"]["mean"],
+                "tables_opened_v4": a["tables_opened"]["mean"], "tables_opened_v3": b["blocks_read"]["mean"],
+                "index_lookups_v4": a["index_lookups"]["mean"],
+                "index_rule_outs_v4": a["index_rule_outs"]["mean"],
+                "index_rule_outs_v3": b["tables_skipped_by_index"]["mean"],
+                "records_v4": a["records_decoded"]["mean"], "records_v3": b["records_decoded"]["mean"],
+                "bytes_v4": a["bytes_decoded"]["mean"], "bytes_v3": b["bytes_decoded"]["mean"],
+                "bloom_checks_v4": a["bloom_checks"]["mean"], "bloom_negative_v4": a["bloom_negative"]["mean"],
+                "bloom_maybe_v4": a["bloom_maybe"]["mean"], "false_positives_v4": a["false_positives"]["mean"],
+                "fp_without_file_access_v4": a["fp_without_file_access"]["mean"],
+                "skip_rate": a["skip_rate"], "fp_rate_on_absent_checks": a["false_positive_rate_on_absent_checks"],
+                "tables_opened_v3_over_v4": (b["blocks_read"]["mean"] / a["tables_opened"]["mean"]
+                                             if a["tables_opened"]["mean"] else None),
+                "records_v3_over_v4": b["records_decoded"]["mean"] / a["records_decoded"]["mean"]
+                if a["records_decoded"]["mean"] else None}
+        cmp_rows.append(row)
+    out["read_work_comparison"] = cmp_rows
 
     # ---- per-table cost decomposition (untimed pass) ----
     dec = []
@@ -1022,111 +1257,155 @@ def analyze(result):
         if not runs_dec:
             dec.append(None)
             continue
-        row = {}
-        for kind in ("miss", "hit"):
-            parts = [d[kind] for d in runs_dec if d.get(kind)]
-            if parts:
-                row[kind] = {"pairs_per_rep": parts[0]["pairs"], "reps": parts[0]["reps"], "runs": len(parts),
-                             **{f"{c}_us_median": statistics.median(p[f"{c}_ns_median"] for p in parts) / 1e3
-                                for c in ("locate", "open_close", "block_read", "lookup")}}
+        row = {"tables": runs_dec[0]["tables"], "miss_no_share_of_tables": runs_dec[0]["miss_no_share_of_tables"]}
+        if all(d["miss_no"] for d in runs_dec):
+            row["miss_no"] = {"pairs_per_rep": runs_dec[0]["miss_no"]["pairs"], "runs": len(runs_dec),
+                              **{f"{c}_us_median": statistics.median(d["miss_no"][f"{c}_ns_median"]
+                                                                     for d in runs_dec) / 1e3
+                                 for c in ("bloom", "lookup")}}
+        parts = [d["hit"] for d in runs_dec if d.get("hit")]
+        if parts:
+            row["hit"] = {"pairs_per_rep": parts[0]["pairs"], "runs": len(parts),
+                          **{f"{c}_us_median": statistics.median(p[f"{c}_ns_median"] for p in parts) / 1e3
+                             for c in ("bloom", "locate", "open_close", "block_read", "lookup")}}
+        fps = [r["false_positive_cost"] for r in s["runs"] if r.get("false_positive_cost")]
+        if fps:
+            row["false_positive"] = {"pairs_per_rep": fps[0]["pairs"], "runs": len(fps),
+                                     **{f"{c}_us_median": statistics.median(p[f"{c}_ns_median"] for p in fps) / 1e3
+                                        for c in ("bloom", "locate", "open_close", "block_read", "lookup")}}
+        row["hash_us_median"] = statistics.median(d["hash"]["hash_ns_median"] for d in runs_dec) / 1e3
+        row["build_ms_median"] = statistics.median(d["build"]["build_ns_median"] for d in runs_dec) / 1e6
+        row["build_us_per_key_median"] = statistics.median(d["build"]["build_ns_per_key_median"]
+                                                           for d in runs_dec) / 1e3
         dec.append(row)
     out["decomposition"] = dec
 
     # ---- writes ----
-    out["put_load"] = {"v3": [write_row(s) for s in sc], "v2": [write_row(e) for e in s2]}
+    out["put_load"] = {"v4": [write_row(s) for s in sc], "v3": [write_row(e) for e in s3]}
     for phase in ("put_overwrite", "delete"):
         rows = []
-        for s, e in zip(sc, s2):
+        for s, e in zip(sc, s3):
             p, q = s["pooled_all_runs"][phase], e["pooled_all_runs"][phase]
             rows.append({"records": s["records"],
-                         "flushing_ops_total_v3": sum(r["write_split"][phase]["n_flush_triggering_ops"] for r in s["runs"]),
-                         "flushing_ops_total_v2": sum(r["write_split"][phase]["n_flush_triggering_ops"] for r in e["runs"]),
-                         "v3_p50_p95_p99_us": [p["all"][m] for m in ("p50_us", "p95_us", "p99_us")],
-                         "v2_p50_p95_p99_us": [q["all"][m] for m in ("p50_us", "p95_us", "p99_us")],
-                         "v3_over_v2_p50": p["all"]["p50_us"] / q["all"]["p50_us"]})
+                         "flushing_ops_total_v4": sum(r["write_split"][phase]["n_flush_triggering_ops"] for r in s["runs"]),
+                         "flushing_ops_total_v3": sum(r["write_split"][phase]["n_flush_triggering_ops"] for r in e["runs"]),
+                         "v4_p50_p95_p99_us": [p["all"][m] for m in ("p50_us", "p95_us", "p99_us")],
+                         "v3_p50_p95_p99_us": [q["all"][m] for m in ("p50_us", "p95_us", "p99_us")],
+                         "v4_over_v3_p50": p["all"]["p50_us"] / q["all"]["p50_us"]})
         out[phase] = rows
 
     # ---- recovery ----
     comp = lambda s, key: statistics.median(r["open_components"][key] for r in s["runs"]) / 1e9  # noqa: E731
     out["open_recovery"] = {
-        "v3_seconds": [s["open_recovery_seconds_median"] for s in sc],
-        "v2_seconds": [e["open_recovery_seconds_median"] for e in s2],
-        "v3_over_v2": [s["open_recovery_seconds_median"] / e["open_recovery_seconds_median"] for s, e in zip(sc, s2)],
-        "v3_per_run_seconds": [s["open_recovery_seconds"] for s in sc],
-        "v2_per_run_seconds": [e["open_recovery_seconds"] for e in s2],
-        "v3_between_run_spread": [(max(s["open_recovery_seconds"]) - min(s["open_recovery_seconds"]))
+        "v4_seconds": [s["open_recovery_seconds_median"] for s in sc],
+        "v3_seconds": [e["open_recovery_seconds_median"] for e in s3],
+        "v4_over_v3": [s["open_recovery_seconds_median"] / e["open_recovery_seconds_median"] for s, e in zip(sc, s3)],
+        "v4_per_run_seconds": [s["open_recovery_seconds"] for s in sc],
+        "v3_per_run_seconds": [e["open_recovery_seconds"] for e in s3],
+        "v4_between_run_spread": [(max(s["open_recovery_seconds"]) - min(s["open_recovery_seconds"]))
                                   / s["open_recovery_seconds_median"] for s in sc],
-        "v3_final_reopen_seconds_median": [statistics.median(s["open_recovery_final_seconds"]) for s in sc],
-        "v2_final_reopen_seconds_median": [statistics.median(e["open_recovery_final_seconds"]) for e in s2],
-        "v3_components_median_seconds": {k: [comp(s, k) for s in sc] for k in
+        "v4_final_reopen_seconds_median": [statistics.median(s["open_recovery_final_seconds"]) for s in sc],
+        "v3_final_reopen_seconds_median": [statistics.median(e["open_recovery_final_seconds"]) for e in s3],
+        "v4_components_median_seconds": {k: [comp(s, k) for s in sc] for k in
+                                         ("list_dir_ns", "sstable_open_ns", "wal_replay_ns", "io_reread_ns",
+                                          "filter_crc_ns")},
+        "v3_components_median_seconds": {k: [comp(e, k) for e in s3] for k in
                                          ("list_dir_ns", "sstable_open_ns", "wal_replay_ns", "index_read_io_ns")},
-        "v2_components_median_seconds": {k: [comp(e, k) for e in s2] for k in
-                                         ("list_dir_ns", "sstable_footer_validation_ns", "wal_replay_ns")},
         "wal_records_replayed": [s["runs"][0]["records_in_wal_at_open"] for s in sc],
         "sstables_opened": tables,
         "index_bytes_read": [s["runs"][0]["open_components"]["index_bytes_read"] for s in sc],
         "index_entries_loaded": [s["runs"][0]["open_components"]["index_entries_loaded"] for s in sc],
+        "filter_bytes_read": [s["runs"][0]["open_components"]["filter_bytes_read"] for s in sc],
         "footer_bytes_read": [s["runs"][0]["open_components"]["footer_bytes_read"] for s in sc],
     }
 
     # ---- memory ----
     mem = []
-    for s, e in zip(sc, s2):
-        d3_load = [p["load"]["private_delta"] for p in s["memory_probes"]]
-        d3_open = [p["open"]["private_delta"] for p in s["memory_probes"]]
-        d2_load = [p["load"]["private_delta"] for p in e["memory_probes"]]
-        d2_open = [p["open"]["private_delta"] for p in e["memory_probes"]]
-        retained = [r["index_memory"]["retained_bytes"] for r in s["runs"]]
+    for s, e in zip(sc, s3):
+        d4_load = [p["load"]["private_delta"] for p in s["memory_probes"]]
+        d4_open = [p["open"]["private_delta"] for p in s["memory_probes"]]
+        d3_load = [p["load"]["private_delta"] for p in e["memory_probes"]]
+        d3_open = [p["open"]["private_delta"] for p in e["memory_probes"]]
+        retained = [r["table_memory"]["retained_bytes"] for r in s["runs"]]
         mem.append({"records": s["records"],
+                    "v4_private_delta_after_load_mb": metric_range([x / 1e6 for x in d4_load]),
+                    "v4_private_delta_after_open_mb": metric_range([x / 1e6 for x in d4_open]),
                     "v3_private_delta_after_load_mb": metric_range([x / 1e6 for x in d3_load]),
                     "v3_private_delta_after_open_mb": metric_range([x / 1e6 for x in d3_open]),
-                    "v2_private_delta_after_load_mb": metric_range([x / 1e6 for x in d2_load]),
-                    "v2_private_delta_after_open_mb": metric_range([x / 1e6 for x in d2_open]),
-                    "v3_over_v2_load_delta": statistics.median(d3_load) / statistics.median(d2_load),
-                    "v3_over_v2_open_delta": statistics.median(d3_open) / statistics.median(d2_open),
-                    "v3_open_minus_v2_open_mb": (statistics.median(d3_open) - statistics.median(d2_open)) / 1e6,
-                    "v3_peak_working_set_after_load_mb": max(p["load"]["peak_working_set_after"]
+                    "v4_over_v3_load_delta": statistics.median(d4_load) / statistics.median(d3_load),
+                    "v4_over_v3_open_delta": statistics.median(d4_open) / statistics.median(d3_open),
+                    "v4_open_minus_v3_open_mb": (statistics.median(d4_open) - statistics.median(d3_open)) / 1e6,
+                    "v4_load_minus_v3_load_mb": (statistics.median(d4_load) - statistics.median(d3_load)) / 1e6,
+                    "v4_peak_working_set_after_load_mb": max(p["load"]["peak_working_set_after"]
                                                              for p in s["memory_probes"]) / 1e6,
-                    "v2_peak_working_set_after_load_mb": max(p["load"]["peak_working_set_after"]
+                    "v3_peak_working_set_after_load_mb": max(p["load"]["peak_working_set_after"]
                                                              for p in e["memory_probes"]) / 1e6,
-                    "v3_memtable_entries_after_load": s["memory_probes"][0]["load"]["memtable_entries"],
-                    "v3_tables_after_load": s["memory_probes"][0]["load"]["tables"],
-                    "index_retained_bytes_tracemalloc": metric_range(retained)})
+                    "v4_tables_after_load": s["memory_probes"][0]["load"]["tables"],
+                    "v4_filter_bytes_after_load": s["memory_probes"][0]["load"]["filter_bytes"],
+                    "table_heap_retained_bytes": metric_range(retained)})
     out["memory"] = mem
 
-    # ---- index overhead ----
+    # ---- index and filter overhead ----
     idx = []
-    for s in sc:
+    for s, e in zip(sc, s3):
         r0 = s["runs"][0]
         ibytes = sum(b for _, b in r0["index_tables"])
+        fbytes = sum(b for _, b in r0["filter_tables"])
         ientries = sum(c for c, _ in r0["index_tables"])
         sst_bytes = sum(b for _, b in r0["tables_final"])
-        retained = statistics.median(r["index_memory"]["retained_bytes"] for r in s["runs"])
+        records_in_tables = sum(c for c, _ in r0["tables_final"])
+        tm = [r["table_memory"] for r in s["runs"]]
+        retained = statistics.median(m["retained_bytes"] for m in tm)
+        bloom_obj = statistics.median(m["bloom_bytes_objects"] for m in tm)
+        v3_ret = statistics.median(r["index_memory"]["retained_bytes"] for r in e["runs"])
         idx.append({"records": s["records"], "sstables": len(r0["tables_final"]), "index_entries": ientries,
-                    "index_bytes": ibytes, "sstable_bytes": sst_bytes,
-                    "index_bytes_share_of_sstable_bytes": ibytes / sst_bytes if sst_bytes else None,
-                    "records_in_tables": sum(c for c, _ in r0["tables_final"]),
-                    "index_bytes_per_record": ibytes / sum(c for c, _ in r0["tables_final"]) if ibytes else None,
-                    "retained_heap_bytes_median": retained,
-                    "retained_heap_over_index_bytes": retained / ibytes if ibytes else None,
-                    "retained_heap_bytes_per_entry": retained / ientries if ientries else None})
-    out["index"] = idx
+                    "index_bytes": ibytes, "filter_bytes": fbytes, "sstable_bytes": sst_bytes,
+                    "filter_share_of_sstable_bytes": fbytes / sst_bytes if sst_bytes else None,
+                    "index_share_of_sstable_bytes": ibytes / sst_bytes if sst_bytes else None,
+                    "records_in_tables": records_in_tables,
+                    "filter_bits_per_record": fbytes * 8 / records_in_tables if fbytes else None,
+                    "filter_bytes_per_record": fbytes / records_in_tables if fbytes else None,
+                    "filter_bytes_per_table": r0["filter_tables"][0][1] if r0["filter_tables"] else None,
+                    "num_hashes": r0["filter_tables"][0][0] if r0["filter_tables"] else None,
+                    "heap_retained_bytes_median": retained, "heap_bloom_objects_bytes_median": bloom_obj,
+                    "heap_retained_minus_bloom_median": retained - bloom_obj,
+                    "v3_index_heap_retained_bytes_median": v3_ret,
+                    "heap_retained_over_v3_index_heap": retained / v3_ret if v3_ret else None,
+                    "bloom_heap_over_bloom_block_bytes": bloom_obj / fbytes if fbytes else None})
+    out["storage"] = idx
+
+    # ---- Bloom validation and false-positive rate ----
+    val, fp = [], []
+    for s in sc:
+        vals = [r["bloom_validation"] for r in s["runs"]]
+        val.append({"records": s["records"], "runs_validated": len(vals),
+                    "keys_checked_per_run": vals[0]["keys_checked"],
+                    "tombstone_keys_checked_per_run": vals[0]["tombstone_keys_checked"],
+                    "tables_per_run": vals[0]["tables"],
+                    "false_negatives": sum(v["false_negatives"] for v in vals),
+                    "all_stored_filters_equal_rebuilt": all(v["stored_filters_equal_rebuilt"] for v in vals)})
+        probes = [r["fpr_probe"] for r in s["runs"] if r.get("fpr_probe")]
+        fp.append({"records": s["records"], **{k: probes[0][k] for k in (
+            "tables", "keys_per_table", "checks", "false_positives", "measured_fpr", "wilson95", "expected_fpr",
+            "per_table_fpr_min_median_max")}} if probes else None)
+    out["bloom_validation"] = val
+    out["false_positive_rate"] = fp
     return out
 
 
 def baseline_analysis(result):
-    v2 = v2_reference()
+    v3 = v3_reference()
     out = {}
     for tag in ("default_limit", "small_limit"):
         entry = result.get("baseline", {}).get(tag)
         if not entry:
             continue
-        ref = v2["baseline"][tag]["aggregate_over_runs"]
+        ref = v3["baseline"][tag]["aggregate_over_runs"]
         rows = {}
         for name, m in entry["aggregate_over_runs"].items():
             if name in ref:
-                rows[name] = {p: {"v3_median": m[p]["median"], "v2_median": ref[name][p]["median"],
-                                  "v3_over_v2": m[p]["median"] / ref[name][p]["median"]}
+                rows[name] = {p: {"v4_median": m[p]["median"], "v3_median": ref[name][p]["median"],
+                                  "v4_over_v3": m[p]["median"] / ref[name][p]["median"]}
                               for p in ("p50_us", "p95_us", "p99_us")}
         out[tag] = rows
     return out
@@ -1138,7 +1417,7 @@ def metadata(args):
     overrides = {k: getattr(args, k) for k in ("memtable_limit_bytes", "hits", "misses", "runs")
                  if getattr(args, k) is not None}
     return {
-        "benchmark": "v3",
+        "benchmark": "v4",
         "command": " ".join([Path(sys.executable).name] + sys.argv),
         "overrides": overrides or None,
         "python": sys.version.replace("\n", " "),
@@ -1152,34 +1431,41 @@ def metadata(args):
             "value_size_bytes": VALUE_SIZE,
             "record_bytes": RECORD_BYTES,
             "delete_record_bytes": DELETE_RECORD_BYTES,
-            "sstable_footer_bytes_v3": FOOTER_V3_SIZE,
+            "sstable_footer_bytes_v4": FOOTER_V4_SIZE,
             "index_entry_bytes": INDEX_ENTRY_BYTES,
             "index_interval": DEFAULT_INDEX_INTERVAL,
+            "bloom_bits_per_key": BITS_PER_KEY,
+            "bloom_num_hashes": NUM_HASHES,
+            "bloom_expected_fpr_formula": bloom.expected_false_positive_rate(1000, bloom.filter_bytes(1000, 10),
+                                                                              NUM_HASHES),
             "store_sync": False,
             "memtable_limit_bytes": args.memtable_limit_bytes or DEFAULT_MEMTABLE_LIMIT_BYTES,
             "default_memtable_limit_bytes": DEFAULT_MEMTABLE_LIMIT_BYTES,
             "runs_per_scale": {str(r): c["runs"] for r, c in V0_SCALES.items()},
             "gets_hit_per_run": {str(r): c for r, c in GET_HITS.items()},
             "gets_miss_per_run": {str(r): c for r, c in GET_MISSES.items()},
-            "instrumented_gets_per_run": {"hit": STRUCT_HITS, "miss": STRUCT_MISSES},
+            "instrumented_gets_per_run": {"hit": STRUCT_HITS, "miss": STRUCT_MISSES_V4},
             "decomposition": {"miss_reps": DECOMP_REPS_MISS, "hit_reps": DECOMP_REPS_HIT,
-                              "hit_pairs": DECOMP_HIT_PAIRS},
+                              "hit_pairs": DECOMP_HIT_PAIRS, "fp_pairs": FP_PAIRS, "hash_reps": HASH_REPS,
+                              "build_reps": BUILD_REPS},
+            "fpr_probe": {"min_keys_per_table": FPR_MIN_KEYS, "min_checks": FPR_MIN_CHECKS,
+                          "probe_key_format": "zzz%08d", "probed_in_first_run_of_each_scale": True},
             "n_overwrites": N_OVERWRITES,
             "n_deletes": N_DELETES,
             "memory_probes_per_scale": MEMORY_PROBES,
             "baseline_runs": BASELINE_RUNS,
             "baseline_small_limit_bytes": SMALL_LIMIT_BYTES,
         },
-        "timing_notes": "Only store calls are timed. Percentiles are nearest-rank (same code as V0/V1/V2). Flush "
+        "timing_notes": "Only store calls are timed. Percentiles are nearest-rank (same code as V0..V3). Flush "
         "boundaries are observed by wrapping the store instance's flush and lsm_store.sstable.write_sstable; no "
         "production code is changed. A flush-triggering operation is a put/delete that finds memtable bytes >= the "
-        "limit and flushes before applying itself; its latency includes the whole flush. Raw per-operation latencies "
-        "are not stored except for flush-triggering operations (one record per flush); percentiles of all, non-flush "
-        "and flush-triggering writes are computed in-process. open_recovery is the first KVStore(path) after "
-        "close() in the same process; open_components repeats the open steps with the module's own functions. "
-        "Read-work counting, the per-table cost decomposition and the index-memory (tracemalloc) pass are untimed and "
-        "run after every timed phase of the run they belong to (read-work counting runs between the timed GETs and "
-        "the timed overwrites, as in V2).",
+        "limit and flushes before applying itself; its latency includes the whole flush (here including building the "
+        "Bloom filter). Raw per-operation latencies are not stored except for flush-triggering operations; "
+        "percentiles of all, non-flush and flush-triggering writes are computed in-process. open_recovery is the "
+        "first KVStore(path) after close() in the same process; open_components repeats the open steps with the "
+        "module's own functions. Read-work counting, the per-table cost decomposition, the Bloom validation scan, the "
+        "false-positive probe and the table-memory (tracemalloc) pass are untimed; read-work counting runs between "
+        "the timed GETs and the timed overwrites (as in V2/V3) and the others after every timed phase of the run.",
     }
 
 
@@ -1192,7 +1478,7 @@ def checkpoint(result, out_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(RESULTS / "v3_benchmark.json"))
+    ap.add_argument("--out", default=str(RESULTS / "v4_benchmark.json"))
     ap.add_argument("--scales", default=None, help="comma-separated record counts from the V0 scale ladder")
     ap.add_argument("--baseline", action="store_true", help="10,000-key head-to-head workloads")
     ap.add_argument("--analyze-only", action="store_true")
@@ -1240,9 +1526,9 @@ def main():
         n_runs = args.runs or V0_SCALES[records]["runs"]
         runs = []
         for i in range(n_runs):
-            print(f"scale {records:>10,} V3 run {i + 1}/{n_runs} ...", flush=True)
+            print(f"scale {records:>10,} V4 run {i + 1}/{n_runs} ...", flush=True)
             t0 = time.perf_counter()
-            runs.append(v3_run(records, limit, n_hits, n_misses, V0_SCALES[records]["gets_per_kind"]))
+            runs.append(v4_run(records, limit, n_hits, n_misses, V0_SCALES[records]["gets_per_kind"], i == 0))
             r = runs[-1]
             s = r["summary"]
             print(f"  done in {time.perf_counter() - t0:.0f}s  flushes={len(r['flushes']['put_load'])}  "
@@ -1255,6 +1541,7 @@ def main():
         entry = scale_entry(records, limit, n_hits, n_misses, runs, memory)
         entry["runs_planned"] = n_runs
         entry["index_interval"] = 16
+        entry["bloom_bits_per_key"] = BITS_PER_KEY
         result["scales"][str(records)] = entry
         del runs
         checkpoint(result, out_path)
