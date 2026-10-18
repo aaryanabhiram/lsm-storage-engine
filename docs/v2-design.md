@@ -97,3 +97,84 @@ Only the newest WAL segment may end in a torn record. Older segments were closed
 - **A table deleted or replaced externally isn't detected** if its name disappears entirely (nothing records which files should exist), though damage inside a present table is.
 - A corrupted length field in the WAL still looks like a torn tail (inherited from V0).
 - Single process, single writer; no locking; not thread-safe.
+
+## Code walkthrough
+
+Two files carry V2: `sstable.py` (one immutable sorted file) and `store.py` (the coordinator).
+
+**1. `sstable.write_sstable(path, items)` writes a table safely.** `items` is already sorted. The sequence is the whole crash-safety story:
+
+```python
+tmp = path + ".tmp"
+with open(tmp, "wb") as f:
+    ...write records, then footer...
+    f.flush(); os.fsync(f.fileno())
+os.replace(tmp, path)            # atomic: the final name is either absent or complete
+fsync_dir(os.path.dirname(path) or ".")
+```
+
+It rejects out-of-order keys (`key <= prev_key`) and refuses to write an empty table. On any exception it removes the `.tmp`.
+
+**2. The footer** is `magic | record_count | data_len | crc32`. `SSTable.__init__` checks magic, CRC, and that `data_len` equals `file size - footer size`.
+
+**3. `SSTable.lookup(key)`** scans from the start with `read_records` (through `_Bounded`, which stops the reader at `data_len` so it can't run into the footer) and stops early once it sees a key greater than the target. It returns a value, `None` (tombstone), or the sentinel `NOT_FOUND`. The sentinel exists because `None` already means "deleted".
+
+**4. `KVStore.get`** is the read order from invariant I4:
+
+```python
+if key in self._memtable:
+    return self._memtable[key]          # None == tombstone
+for table in reversed(self._sstables):  # newest first
+    found = table.lookup(key)
+    if found is not NOT_FOUND:
+        return found
+return None
+```
+
+**5. `KVStore.flush`** is the three-step protocol from the doc. Read it with the doc beside you:
+
+1. `write_sstable(sst_path, sorted(self._memtable.items()))` (the commit point is the rename inside).
+2. Create the new WAL segment, `fsync_dir`, swap `self._wal`, empty the memtable.
+3. `old_wal.close()` then `_delete_segments_before(new_id)`, which removes segments **oldest first**.
+
+**6. `put`** calls `_flush_if_full()` *before* appending to the WAL, so a failed flush can't leave a half-applied write.
+
+**7. Recovery** lives in `__init__`, `_replay_segments` and `_replay_closed_segment`. Only the newest segment may have a torn tail (`replay` repairs it). Older segments must be complete, otherwise `CorruptionError`.
+
+## Interview questions
+
+**Why write the memtable out as a *sorted* immutable file?**
+Sorted keys let a reader stop early and later enable binary search (V3), merging (V6) and range scans. Immutability means no locking for readers, no in-place update hazards, trivially cacheable (V5), and crash safety reduces to "is the file complete or not".
+
+**Why write to a `.tmp` file and rename?**
+`os.replace` is atomic, so a file with the final name is always complete. A crash mid-build leaves only a `.tmp`, which recovery deletes. The rename is the commit point.
+
+**Why fsync the table even when `sync=False`?**
+Because after the flush the WAL records covering it get deleted. If the table weren't durable, deleting the WAL would lose data. The flush has to be durable regardless of the per-write setting.
+
+**Why delete WAL segments oldest first?**
+So whatever survives a crash is always a *suffix* (the newest segments). Replaying a suffix can't resurrect an older value that a newer table has overwritten. Deleting newest first could leave an old segment holding `k=1` while a later (already deleted) segment held `k=2`: replay would bring back `k=1`. A test covers this.
+
+**Why does the SSTable have a footer when records already have CRCs?**
+The record reader treats a short read as a "torn tail" and stops quietly. That's right for a log but would let a *truncated* table pass as a shorter valid one. The footer states the exact record count and length, so truncation, extension and miscounts are detected.
+
+**Why not verify every table fully at open?**
+That would make startup proportional to total data size. Open checks only the footer (one small read), and record CRCs are checked whenever those records are read.
+
+**Why must tombstones be kept in SSTables?**
+A tombstone in a newer table has to hide a value in an older one. Dropping it would make the old value reappear. (V6 shows when it *is* safe to drop.)
+
+**Why is `NOT_FOUND` a sentinel object instead of `None`?**
+`None` already means "tombstone": the key was deleted and the search must stop. `NOT_FOUND` means "this table knows nothing, keep looking in older tables".
+
+**Why does a bad SSTable raise instead of being skipped?**
+The WAL records it replaced may already be deleted. Skipping it would silently lose data. Failing loudly is the only safe option.
+
+**What happens if the process crashes between creating the table and deleting old WAL segments?**
+Nothing is lost: on reopen the old segments replay into the memtable (redundantly with the table), and the next flush cleans them up. The crash table in the doc lists every window.
+
+**Why does `fsync_dir` do nothing on Windows?**
+A directory can't be opened for fsync there. So rename durability relies on the filesystem journal, and the doc claims nothing stronger. On POSIX, a new file's *name* is not durable until its directory is fsynced.
+
+**What does GET cost now, and why is that a problem?**
+Memtable lookup, then a scan of every table that could hold the key, and a miss scans all of them. It grows with both table count and table size. V3 fixes the size part, V4 the count part, V6 the count itself.

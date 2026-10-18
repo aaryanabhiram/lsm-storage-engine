@@ -1,10 +1,12 @@
 import bisect
+import io
 import os
 import struct
 import zlib
 from contextlib import closing
 
 from . import bloom
+from .blockcache import BlockCache
 from .fsutil import fsync_dir
 from .record import OP_DELETE, OP_PUT, CorruptionError, encode, read_records
 
@@ -56,8 +58,8 @@ def write_sstable(path, items, index_interval=None, bloom_bits_per_key=None):
         raise ValueError("index_interval must be a positive integer")
     tmp = path + ".tmp"
     index_entries = []
-    count = 0
-    data_len = 0
+    record_count = 0
+    serialised_length = 0
     prev_key = None
     bits = None
     k = 0
@@ -81,26 +83,26 @@ def write_sstable(path, items, index_interval=None, bloom_bits_per_key=None):
                     data = encode(OP_DELETE, key)
                 else:
                     data = encode(OP_PUT, key, value)
-                if index_interval is not None and count % index_interval == 0:
-                    index_entries.append(_INDEX_ENTRY_HEADER.pack(len(key), data_len) + key)
+                if index_interval is not None and record_count % index_interval == 0:
+                    index_entries.append(_INDEX_ENTRY_HEADER.pack(len(key), serialised_length) + key)
                 if bits is not None:
                     bloom.add(bits, key, k)  # PUT and DELETE alike: a tombstone is a version of the key
                 f.write(data)
-                count += 1
-                data_len += len(data)
-            if count == 0:
+                record_count += 1
+                serialised_length += len(data)
+            if record_count == 0:
                 raise ValueError("refusing to write an empty SSTable")
             if index_interval is None:
-                body = _FOOTER_BODY.pack(MAGIC, count, data_len)
+                body = _FOOTER_BODY.pack(MAGIC, record_count, serialised_length)
             else:
                 index_block = b"".join(index_entries)
                 f.write(index_block)
                 if bits is None:
-                    body = _FOOTER_V3_BODY.pack(MAGIC_V3, count, data_len, len(index_block), index_interval, zlib.crc32(index_block))
+                    body = _FOOTER_V3_BODY.pack(MAGIC_V3, record_count, serialised_length, len(index_block), index_interval, zlib.crc32(index_block))
                 else:
                     filter_block = bytes(bits)
                     f.write(filter_block)
-                    body = _FOOTER_V4_BODY.pack(MAGIC_V4, count, data_len, len(index_block), index_interval,
+                    body = _FOOTER_V4_BODY.pack(MAGIC_V4, record_count, serialised_length, len(index_block), index_interval,
                                                 zlib.crc32(index_block), len(filter_block), k,
                                                 zlib.crc32(filter_block))
             f.write(body + struct.pack(">I", zlib.crc32(body)))
@@ -136,8 +138,9 @@ class SSTable:
     # TODO: index + bloom filter of every table live in memory (~10 bits/key for the filter), grows with total keys on disk
     # TODO bits-per-key hardcoded to 10, never tuned against the false positive rate
 
-    def __init__(self, path):
+    def __init__(self, path, cache=None):
         self.path = path
+        self._cache = cache  # shared block cache; the table identity in its keys is ``path`` (tables are never rewritten)
         size = os.path.getsize(path)
         if size < FOOTER_SIZE:
             raise CorruptionError(f"{path}: too short to contain a footer")
@@ -293,11 +296,20 @@ class SSTable:
             next_key = self._keys[block + 1]
         else:
             next_key = None
-        with _open_table(self.path) as raw:
+        data = None
+        if self._cache is not None:
+            data = self._cache.get(self.path, block)
+        if data is None:
+            data = self._read_block(start, end)
+            # only cache full reads, a short read (truncated file) has to keep failing every time
+            if self._cache is not None and len(data) == end - start:
+                self._cache.put(self.path, block, data)
+        try:
             n = 0
             pos = start
             prev = None
-            for rec in read_records(_Bounded(raw, end, start)):
+            # cached bytes go through the same decode + validation as a disk read
+            for rec in read_records(_Bounded(io.BytesIO(data), end - start)):
                 if n == 0 and rec.key != self._keys[block]:
                     raise CorruptionError(f"{self.path}: index entry {block} does not match the record at offset {start}")
                 if prev is not None and rec.key <= prev:
@@ -310,6 +322,17 @@ class SSTable:
                 yield rec
             if n != expected or pos != end:
                 raise CorruptionError(f"{self.path}: block {block} does not match the index")
+        except CorruptionError:
+            # bad block must not stay cached
+            if self._cache is not None:
+                self._cache.discard(self.path, block)
+            raise
+
+    def _read_block(self, start, end):
+        # the only place a block really hits the disk (cache miss)
+        with _open_table(self.path) as raw:
+            raw.seek(start)
+            return raw.read(end - start)
 
     def items(self):
         for rec in self._scan():

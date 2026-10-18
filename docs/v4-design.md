@@ -102,3 +102,89 @@ Verified by a **full scan** (`items()`): everything V3 checks, and in addition t
 - Table count and total filter memory keep growing, and every GET still evaluates one filter per table.
 - Bits per key is fixed per table at write time; changing the setting doesn't rewrite existing tables.
 - `sync`, flush stalls, single-writer limits and Windows directory-fsync caveats are as in V2.
+
+## Code walkthrough
+
+V4 adds `bloom.py` (42 lines) and wires it into `sstable.py`.
+
+**1. `bloom.py` has four small functions.**
+
+| function | job |
+|---|---|
+| `num_hashes(bits_per_key)` | `round(b * ln 2)`, clamped to 1..32 |
+| `filter_bytes(count, bits_per_key)` | filter size in bytes, minimum 8 |
+| `_positions(key, m, k)` | the `k` bit positions for a key |
+| `add` / `may_contain` | set bits / test bits |
+
+**2. `_positions` is double hashing with a deterministic hash:**
+
+```python
+h1, h2 = _HALVES.unpack(hashlib.blake2b(key, digest_size=16).digest())
+h2 |= 1
+for i in range(k):
+    yield (h1 + i * h2) % m
+```
+
+One 16-byte digest becomes two 64-bit halves; `h2 |= 1` forces it odd so the stride doesn't collapse to a short cycle. Python's built-in `hash()` is deliberately not used, because it's randomised per process and the bits are stored on disk.
+
+**3. `may_contain` returns `False` at the first clear bit.** That's why a typical negative costs about two probes.
+
+**4. `write_sstable(..., bloom_bits_per_key=b)` fills the filter as records are written.** It needs the key count up front to size the bitset, which is why it materialises non-list inputs (and why V6 later passes `expected_count`). It adds **every** key, tombstones included:
+
+```python
+bloom.add(bits, key, k)  # PUT and DELETE alike: a tombstone is a version of the key
+```
+
+**5. The V4 footer** adds `filter_len`, `num_hashes` and `filter_crc`. `_open_v4` validates `1 <= k <= 32`, at least one filter bit per key, then loads and CRC-checks the filter block into `self._bloom`.
+
+**6. `SSTable.may_contain(key)` and `lookup`:**
+
+```python
+def may_contain(self, key):
+    return self._bloom is None or bloom.may_contain(self._bloom, key, self.num_hashes)
+...
+if not self.may_contain(key):
+    return NOT_FOUND            # no file access at all
+```
+
+A V2/V3 table has `_bloom is None`, so it always answers "maybe".
+
+**7. `_scan` (used by `items()`) rebuilds the filter from the keys it reads** and compares it to the stored bytes. That catches a filter that has valid CRCs but doesn't match the table.
+
+## Interview questions
+
+**What problem does a Bloom filter solve here?**
+V3 still reads a block from every table a missing key falls within. A Bloom filter lets most tables answer "definitely not here" from memory, with no file access. It saves the most for lookups of keys that aren't in a table.
+
+**Can a Bloom filter give false negatives? Why not?**
+No. Adding a key sets its `k` bits, and bits are never cleared, so an added key always sees all its bits set. False positives are possible and just cost one wasted block read.
+
+**Why must tombstones go into the filter?**
+If a deleted key were missing from its table's filter, a GET would skip that newer table and fall through to an older table that still holds the value, resurrecting the deleted key.
+
+**How did you choose 10 bits per key and 7 hashes?**
+The optimal number of hashes for `b` bits per key is `b * ln 2`, so 10 bits gives about 7. The false-positive rate is then `(1 - e^(-k/b))^k`, about 0.82%. Ten bits is about 1.25 bytes per key, around 1% of a ~111-byte record. It's described as a starting point, not tuned (see the source TODO).
+
+**Why not use Python's `hash()`?**
+It's randomised per process (`PYTHONHASHSEED`). The filter is persisted, so the same key must map to the same bits in every run. A test checks filter bytes are identical across seeds and match a pinned digest.
+
+**Why double hashing instead of `k` independent hashes?**
+Kirsch and Mitzenmacher showed that deriving `k` positions from two hashes keeps the same asymptotic false-positive rate while costing one hash call. Here, one BLAKE2b digest is split in two.
+
+**Why `h2 |= 1`?**
+An odd stride avoids degenerate position cycles (an even stride can only reach a subset of positions when `m` has factors of 2).
+
+**Why is the filter built per SSTable rather than one global filter?**
+Tables are immutable, so each filter is built once and never updated or invalidated. A global filter would need deletes (which Bloom filters can't do) and rebuilding on every compaction.
+
+**What breaks if you change the hash construction later?**
+Every stored filter would silently give wrong answers, including false negatives. That requires a new format magic, which is why the construction is pinned by a test.
+
+**What stops an old table without a filter from being read as "empty filter"?**
+`_bloom is None` marks "no filter", and `may_contain` returns `True` for it. An empty filter would answer "no" for every key and lose data.
+
+**What does a Bloom filter *not* help with?**
+Keys that are present (a hit still reads one block), range scans, and it can't shrink the number of tables. Filter memory also grows with total keys.
+
+**How would you test that a "no" really skips the file?**
+Count calls through the single `_open_table` function. The tests assert zero opens, which is structural evidence rather than a timing guess.

@@ -69,3 +69,78 @@ Open a read handle, scan every record from the start, keep the latest state for 
 - Old versions and tombstones are never reclaimed; the file only grows.
 - `get` and the open-time scan are O(file size).
 - Not thread-safe.
+
+## Code walkthrough
+
+Read the code in this order: `record.py` (the format), then `store.py` (the three operations).
+
+**1. `record.encode` builds one record.** The CRC is computed over everything *after* itself, then prepended:
+
+```python
+body = struct.pack(">BII", op, len(key), len(value)) + key + value
+return struct.pack(">I", zlib.crc32(body)) + body
+```
+
+Because the lengths are inside the checksummed body, a flipped bit in `key_len` is caught by the CRC like any other bit.
+
+**2. `record.read_records` is a generator that walks the file.** Three outcomes matter:
+
+| situation | what the reader does |
+|---|---|
+| header or body is shorter than declared | `return` quietly: a torn tail, not an error |
+| CRC mismatch, unknown `op`, DELETE with a value | `raise CorruptionError` |
+| valid record | `yield Record(op, key, value, end_offset)` |
+
+`end_offset` is what recovery uses to know where the last good record ends.
+
+**3. `KVStore._recover` runs once at open.** It scans the whole file, remembers the last `end_offset`, and if the file is longer than that, truncates it and fsyncs. Then (and only then) `__init__` opens the file in append mode. Order matters: appending before repairing would put new records after garbage.
+
+**4. `put` / `delete` go through `_append`.** `write` (Python buffer) -> `flush` (OS cache) -> optional `os.fsync` (disk). Those are the three durability levels from the table above, one line each.
+
+**5. `get` is the baseline to beat.** It opens a fresh read handle and loops over every record, overwriting `curr` each time the key matches. "Last record wins" is implemented by simply not stopping early.
+
+```python
+for r in read_records(f):          # later records override earlier ones
+    if r.key == key:
+        curr = r.value if r.op == OP_PUT else None
+```
+
+Things to notice: a tombstone is just `curr = None`, and there is no truthiness test anywhere, so `b""` stays a real value.
+
+## Interview questions
+
+**Why an append-only log instead of updating records in place?**
+Appends are sequential I/O, which is the cheapest access pattern on both HDDs and SSDs. An in-place update can be torn halfway (old and new bytes mixed), whereas an append can only fail at the tail, where recovery can detect and cut it. It also makes "state = last record for the key" a one-line rule.
+
+**Why does `delete` append a tombstone instead of removing the record?**
+You can't remove bytes from the middle of an append-only file without rewriting it. A tombstone is also what later stages need: it must be able to *shadow* older values that live in other files.
+
+**Why does `delete` append a tombstone even if the key doesn't exist?**
+Checking would need a full scan (V0 has no index), and the tombstone is harmless. It keeps `delete` O(1).
+
+**Why a CRC on every record? What does it not protect against?**
+It detects accidental damage (bad write, bit rot). It does not repair anything and is not a security feature: anyone who can rewrite the file can recompute the CRC.
+
+**Why is the CRC placed first and computed over the lengths too?**
+So the reader can validate a record from its header + body without trusting any field first. If lengths were outside the checksum, a corrupt length would silently desynchronise every following record.
+
+**Why treat a short tail as "torn" but a bad CRC as "corruption"?**
+A short tail is exactly what a crash during append produces, and that write was never acknowledged, so dropping it loses nothing. A *complete* record with a wrong checksum means acknowledged data was damaged. Silently dropping it would hide data loss, so the store refuses to open.
+
+**What's the weakness of that rule?**
+A corrupted length field mid-file can make a record look as if it runs past the end of the file, so it looks like a torn tail and recovery would truncate everything after it. (Listed under limitations. There is also a `TODO` in `read_records` about capping lengths before reading.)
+
+**Explain `write`, `flush`, `fsync`. What does each survive?**
+`write` copies into Python's buffer: lost on process crash. `flush` hands bytes to the OS: survives a process crash, not power loss. `fsync` asks the device to persist them: survives power loss, as far as the OS and hardware honour it.
+
+**Why default to `sync=True` if it's slow?**
+Safe by default: an acknowledged write is durable. `sync=False` is an explicit opt-in to lose the most recent writes on power loss in exchange for throughput.
+
+**Why big-endian and `struct`?**
+A fixed, explicit byte order means files are portable across machines and the format is unambiguous. `struct` with `">IBII"` documents the layout in one line.
+
+**What is the time complexity of each operation?**
+`put`/`delete`: O(record size) plus one fsync. `get` and open: O(file size). The next versions exist to fix those two.
+
+**How would you make this safe for two processes?**
+It isn't: there's no file lock, and two writers can interleave and corrupt the log. A real fix is an OS-level lock (e.g. a `LOCK` file) taken at open.

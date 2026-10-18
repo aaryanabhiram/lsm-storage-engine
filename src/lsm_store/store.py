@@ -2,6 +2,7 @@ import os
 import re
 
 from . import bloom, sstable
+from .blockcache import DEFAULT_BLOCK_CACHE_BYTES, BlockCache
 from .fsutil import fsync_dir
 from .record import OP_DELETE, OP_PUT, CorruptionError, read_records
 from .sstable import NOT_FOUND, SSTable
@@ -26,9 +27,11 @@ class KVStore:
     # TODO memtable limit is key+value bytes only, dict overhead isn't counted so real mem use is a few x the limit
     # TODO: index_interval is fixed at 16, never tuned. bigger interval = smaller index, more records scanned per lookup
     # TODO: filters only help for keys missing from a table, a present key still needs a block read. no range scan at all
+    # TODO: block cache is per store instance (cold after reopen, not shared), sized in payload bytes only
 
     def __init__(self, path, sync=True, memtable_limit_bytes=DEFAULT_MEMTABLE_LIMIT_BYTES,
-                 index_interval=DEFAULT_INDEX_INTERVAL, bloom_bits_per_key=DEFAULT_BLOOM_BITS_PER_KEY):
+                 index_interval=DEFAULT_INDEX_INTERVAL, bloom_bits_per_key=DEFAULT_BLOOM_BITS_PER_KEY,
+                 block_cache_bytes=DEFAULT_BLOCK_CACHE_BYTES):
         if not isinstance(memtable_limit_bytes, int) or memtable_limit_bytes < 1:
             raise ValueError("memtable_limit_bytes must be a positive integer")
         if not isinstance(index_interval, int) or isinstance(index_interval, bool) or index_interval < 1:
@@ -36,6 +39,7 @@ class KVStore:
         if (not isinstance(bloom_bits_per_key, int) or isinstance(bloom_bits_per_key, bool)
                 or not 1 <= bloom_bits_per_key <= bloom.MAX_BITS_PER_KEY):
             raise ValueError(f"bloom_bits_per_key must be an integer in 1..{bloom.MAX_BITS_PER_KEY}")
+        self._block_cache = BlockCache(block_cache_bytes)  # before opening the tables: they share it
         self._index_interval = index_interval
         self._bloom_bits_per_key = bloom_bits_per_key
         self._dir = path
@@ -52,7 +56,7 @@ class KVStore:
         wal_ids = self._ids(_WAL_RE)
         self._sstables = []  # oldest -> newest
         for i in sst_ids:
-            self._sstables.append(SSTable(self._sst_path(i)))
+            self._sstables.append(SSTable(self._sst_path(i), cache=self._block_cache))
         self._memtable = self._replay_segments(wal_ids)
         self._mem_bytes = 0
         for k, v in self._memtable.items():
@@ -74,6 +78,8 @@ class KVStore:
     def put(self, key, value):
         self._check_bytes(key, value)
         self._check_open()
+
+
         # flush runs inline when the memtable is full, so this put() eats the whole sstable write + fsync. bg thread someday
         self._flush_if_full()  # flush first so a failed flush can't leave a half applied put
         self._wal.append(OP_PUT, key, value)  # may raise: memtable untouched
@@ -105,7 +111,7 @@ class KVStore:
         sst_path = self._sst_path(self._take_id())
         sstable.write_sstable(sst_path, sorted(self._memtable.items()), index_interval=self._index_interval,
                               bloom_bits_per_key=self._bloom_bits_per_key)
-        self._sstables.append(SSTable(sst_path))
+        self._sstables.append(SSTable(sst_path, cache=self._block_cache))
         # 2. sst covers the memtable now, new wal segment
         new_id = self._take_id()
         new_wal = WriteAheadLog(self._wal_path(new_id), self._sync)
@@ -115,14 +121,19 @@ class KVStore:
         self._wal_id = new_id
         self._memtable = {}
         self._mem_bytes = 0
-
-
         # 3. old wal segs are redundant now, delete oldest first
         old_wal.close()
         self._delete_segments_before(new_id)
 
     def close(self):
         self._wal.close()
+
+    @property
+    def block_cache(self):
+        return self._block_cache
+
+    def cache_stats(self):
+        return self._block_cache.stats()
 
     def __enter__(self):
         return self
@@ -183,9 +194,9 @@ class KVStore:
         return ids
 
     def _take_id(self):
-        curr_id = self._next_id
+        taken = self._next_id
         self._next_id += 1
-        return curr_id
+        return taken
 
     def _wal_path(self, wal_id):
         return os.path.join(self._dir, "wal-%08d.log" % wal_id)

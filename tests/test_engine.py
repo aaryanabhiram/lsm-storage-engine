@@ -5,6 +5,7 @@ import random
 import pytest
 
 from lsm_store import CorruptionError, KVStore, sstable
+from lsm_store.blockcache import BlockCache
 from lsm_store.record import OP_PUT, encode
 
 
@@ -295,3 +296,70 @@ def test_corrupted_filter_block_raises_on_open(path):
         f.write(data)
     with pytest.raises(CorruptionError):
         KVStore(path)
+
+
+def test_block_cache_bytes_must_be_valid(path):
+    with pytest.raises(ValueError):
+        KVStore(path, block_cache_bytes=-1)
+
+
+def test_second_get_of_the_same_key_hits_the_cache(path):
+    with KVStore(path) as db:
+        for i in range(40):
+            db.put(b"key%03d" % i, b"value%03d" % i)
+        db.flush()
+        assert db.get(b"key017") == b"value017"
+        after_first = db.cache_stats()
+        assert after_first["misses"] == 1 and after_first["hits"] == 0
+        assert db.get(b"key017") == b"value017"
+        assert db.cache_stats()["hits"] == 1
+
+
+def test_disabled_cache_gives_the_same_answers(path):
+    with KVStore(path, memtable_limit_bytes=300, block_cache_bytes=0) as db:
+        for i in range(100):
+            db.put(b"key%03d" % i, b"value%03d" % i)
+        for i in range(100):
+            assert db.get(b"key%03d" % i) == b"value%03d" % i
+        assert db.cache_stats()["hits"] == 0 and db.cache_stats()["entries"] == 0
+
+
+def test_reopening_starts_with_an_empty_cache(path):
+    with KVStore(path) as db:
+        db.put(b"a", b"1")
+        db.flush()
+        db.get(b"a")
+        assert db.cache_stats()["entries"] == 1
+    with KVStore(path) as db:
+        assert db.cache_stats()["entries"] == 0
+
+
+def test_cache_evicts_the_least_recently_used_block():
+    cache = BlockCache(100)
+    cache.put("t", 1, b"a" * 40)
+    cache.put("t", 2, b"b" * 40)
+    cache.get("t", 1)  # block 1 is now the most recently used
+    cache.put("t", 3, b"c" * 40)  # does not fit: block 2 is evicted
+    assert ("t", 1) in cache and ("t", 3) in cache and ("t", 2) not in cache
+    assert cache.stats()["evictions"] == 1 and cache.bytes == 80
+
+
+def test_block_bigger_than_the_whole_cache_is_not_stored():
+    cache = BlockCache(10)
+    assert cache.put("t", 1, b"x" * 11) is False
+    assert len(cache) == 0
+
+
+def test_corrupted_block_is_not_kept_in_the_cache(path):
+    with KVStore(path) as db:
+        db.put(b"a", b"1")
+        db.flush()
+    table = sstables(path)[0]
+    data = bytearray(open(table, "rb").read())
+    data[13] ^= 0xFF  # a byte in the first record's key
+    with open(table, "wb") as f:
+        f.write(data)
+    with KVStore(path) as db:
+        with pytest.raises(CorruptionError):
+            db.get(b"a")
+        assert db.cache_stats()["entries"] == 0

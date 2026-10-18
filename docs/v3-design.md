@@ -62,3 +62,71 @@ Verified at **lookup**, within the block read: record CRCs, key order, the first
 - The index holds a key per `interval` records in memory, which isn't negligible with large keys or a small interval.
 - Corruption inside a block that a lookup never reads is detected only by a scan that reaches it.
 - `sync`, flush stalls, single-writer limits and Windows directory-fsync caveats are as in V2.
+
+## Code walkthrough
+
+All of V3 is in `sstable.py` (plus one new constructor option in `store.py`).
+
+**1. `write_sstable(..., index_interval=N)` builds the index while writing records.** Before each record whose position is a multiple of the interval, it remembers `(key_len, byte offset, key)`:
+
+```python
+if index_interval is not None and record_count % index_interval == 0:
+    index_entries.append(_INDEX_ENTRY_HEADER.pack(len(key), serialized_length) + key)
+```
+
+`serialized_length` is the running byte offset of the next record, so it needs no second pass. The index block and a bigger footer (with `interval` and `index_crc`) are written after the records, and everything still goes through `.tmp` -> fsync -> rename.
+
+**2. `SSTable.__init__` detects the format.** It tries each footer size and accepts one only if magic *and* footer CRC both match (see the interview question below for why). Then `_open_v2` or `_open_v3` runs.
+
+**3. `_load_index` parses the index block into two parallel lists, `self._keys` and `self._offsets`,** and sanity-checks them: entry count is `ceil(count / interval)`, first offset is 0, keys and offsets are strictly ascending, offsets lie inside the record region.
+
+**4. `locate(key)` is a binary search:**
+
+```python
+b = bisect.bisect_right(self._keys, key) - 1
+if b < 0:
+    return None                       # smaller than the table's first key: no file access
+end = self._offsets[b + 1] if b + 1 < len(self._offsets) else self.data_len
+return b, self._offsets[b], end
+```
+
+`bisect_right - 1` is "the last index key <= target", which is the only block that can hold the key.
+
+**5. `_scan_block(block, start, end)` reads only `[start, end)`** (`raw.seek(start); raw.read(end - start)`) and decodes it. While decoding it checks that the first key equals the index key, keys ascend, no key reaches the next block's first key, and (if the scan finishes) the record count and byte length match the index.
+
+**6. `lookup` chooses the path:** unindexed (V2) table -> `_scan()`; indexed -> `locate` then `_scan_block`.
+
+## Interview questions
+
+**Why a *sparse* index instead of one entry per key?**
+A per-key index is as big as the key set and defeats the point of having a compact in-memory structure. Indexing every Nth record makes the index about 1/N of the keys while bounding the scan to at most N records.
+
+**How do you pick `index_interval`?**
+It's a space/time trade: a larger interval means a smaller index but more records scanned per lookup; a smaller one means the opposite. 16 is a starting value, not a tuned one (the source says so). A real choice would measure lookup latency against index memory on the target workload.
+
+**Why does sparse indexing only work on *sorted* data?**
+The binary search relies on order: if block `b` starts with a key <= target and block `b+1` starts with a larger key, the target can only be in block `b`.
+
+**Why is the index stored inside the table file and not in a separate file?**
+One rename installs records and index together, so they can never disagree after a crash. Two files would need their own atomic-pair protocol.
+
+**Why record the interval in each table's footer?**
+So tables written with different settings can coexist, and settings can change over time without rewriting old tables.
+
+**How does the store stay compatible with V2 tables?**
+The reader recognises both footers. A V2 table has `interval = None` and is scanned in full. No migration is required.
+
+**Why check footer CRC as well as magic when detecting the format?**
+Table data precedes the footer, and a user key could end in bytes that look like another format's magic. A magic match alone could misclassify a table. Magic plus a valid CRC makes that practically impossible.
+
+**What does a lookup verify, and what doesn't it?**
+It validates record CRCs, key order and consistency with the index within the block it reads. It doesn't read other blocks, and it can return early without checking the rest of its own block. Full-table checks happen in `items()`.
+
+**What does a *miss* cost in V3?**
+For each table the key falls within, one index search plus one block read, even though the key isn't there. Table count still multiplies this. That is exactly the problem V4 addresses.
+
+**What happens if the index is corrupted?**
+The index CRC is checked at open, so damage is caught before any lookup uses it. Consistency checks catch a self-consistent but wrong index when a block is read (first key mismatch, overlap with the next block).
+
+**Why is the index kept in memory rather than read from disk each time?**
+Avoiding a disk read per lookup is the point. The cost is memory proportional to keys/interval and startup time proportional to total index size.

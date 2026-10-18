@@ -85,3 +85,71 @@ Identical to V0. Every mutation writes and flushes to the OS. With `sync=True` (
 - Startup replay is O(WAL size).
 - Single process, single writer; no file locking; not thread-safe.
 - Inherited from V0: a corrupted length field mid-file looks like a truncated tail, so recovery would truncate everything after it. A write that fails partway inside a running process can leave a partial record in the WAL, which is only cleaned up on the next open (later appends in the same session land after it).
+
+## Code walkthrough
+
+V1 is small: `store.py` is about 50 lines because `wal.py` does the file work.
+
+**1. `wal.replay(path)` rebuilds state and repairs the file.** It loops over `read_records`, and for each record sets `kv_map[key] = value` (PUT) or `None` (DELETE). It also tracks `good_end`, and if the file is longer than that, truncates and fsyncs.
+
+```python
+for r in read_records(f):
+    kv_map[r.key] = r.value if r.op == OP_PUT else None
+    good_end = r.end_offset
+if good_end < os.fstat(f.fileno()).st_size:
+    f.truncate(good_end); f.flush(); os.fsync(f.fileno())
+```
+
+This is V0's recovery scan plus a dictionary. Because each record is *absolute* state (not "add 1" or "append to"), replaying the same prefix always gives the same result.
+
+**2. `WriteAheadLog.append`** encodes a record, writes it, flushes, and fsyncs if `sync=True`. It's V0's `_append` moved into its own class.
+
+**3. `KVStore.__init__`** is two lines, and the order is the point:
+
+```python
+self._memtable = replay(path)            # recover (and repair) first ...
+self._wal = WriteAheadLog(path, sync)    # ... then open for append
+```
+
+**4. `put` is the write-ordering invariant in code:**
+
+```python
+self._wal.append(OP_PUT, key, value)   # may raise: memtable untouched
+self._memtable[key] = value
+```
+
+If `append` raises, the second line never runs, so nothing is visible that isn't in the log.
+
+**5. `get` is one line**, `self._memtable.get(key)`. `None` covers both "never seen" and "tombstone" (callers can't tell them apart, and don't need to). It never touches the file.
+
+## Interview questions
+
+**What problem does the memtable solve, and what does it cost?**
+It turns `get` from O(file size) into an O(1) dict lookup. The cost: the whole dataset (every key *and* value) must fit in RAM, and startup must replay the whole WAL. That's why V1 is called transitional.
+
+**Why is the log called a *write-ahead* log?**
+The record is made durable in the log *before* the in-memory state changes. If we crash after the log write, replay reproduces the change. If we crash before it, the change was never acknowledged.
+
+**Why append to the WAL first and update the memtable second? What if you swapped them?**
+Swapped, a reader could see a value that was never made durable, and a failed append would leave the memtable ahead of the log. The invariant "visible in the memtable implies its WAL append completed" only holds in the WAL-first order. Tests inject write, flush and fsync failures to check it.
+
+**If `fsync` raises, did the write happen?**
+Unknown. The bytes may already be in the OS cache and could appear after a restart even though the call raised. The honest contract is "outcome unknown", not "didn't happen".
+
+**Why `dict[bytes, bytes | None]` and not an ordered structure like a skip list?**
+V1 never iterates in key order, so ordering would cost without benefit. (V2 needs sorted output, but it simply sorts the dict once at flush time: `sorted(self._memtable.items())`.)
+
+**Why store `None` as the tombstone rather than removing the key from the dict?**
+Removing it would lose the information "this key was deleted", which later stages need to shadow older values on disk. It also keeps replay consistent: the last record for a key wins, even if that's a delete.
+
+**Why must you never use truthiness (`if value:`) on values here?**
+`b""` is a legitimate value and is falsy. `None` and `b""` mean different things (deleted vs empty), so code uses `is None` / dictionary membership.
+
+**Why recover (and truncate) *before* opening the WAL for append?**
+Otherwise new records would be written after a torn partial record and become unreadable garbage for the next replay.
+
+**Why is the WAL format byte-identical to V0's?**
+It lets the same reader/writer be reused, and a test can assert that the same operations produce identical bytes in V0 and V1. It also means the format stays stable while the architecture changes.
+
+**What are V1's scaling limits?**
+Memory is proportional to the number of distinct keys plus value bytes. Startup is O(WAL size). The WAL never shrinks, because stale versions and tombstones are never reclaimed.
