@@ -1,0 +1,362 @@
+{
+ "kind": "derived cache metrics (not timed): block accesses derived from table geometry and rebuilt Bloom filters, replayed through an independent LRU model; asserted equal to the measured cache counters, physical block reads, bytes read and decode work of every run",
+ "block_records": 16,
+ "block_bytes_full": 1984,
+ "bloom_bits_per_key": 10,
+ "bloom_num_hashes": 7,
+ "standard": {
+  "10000": {
+   "records": 10000,
+   "tables": 0,
+   "entries_per_table": 37787,
+   "block_accesses": {
+    "hit": 0,
+    "miss": 0
+   },
+   "cache": {
+    "hits": 0,
+    "misses": 0,
+    "insertions": 0,
+    "evictions": 0,
+    "bytes": 0,
+    "entries": 0,
+    "hit_rate": 0.0,
+    "bytes_read": 0
+   },
+   "uncached_block_reads": 0,
+   "uncached_bytes_read": 0,
+   "misses_per_phase": {
+    "hit": 0,
+    "miss": 0
+   },
+   "work": {
+    "hit": {
+     "tables_consulted": 0,
+     "bloom_checks": 0,
+     "bloom_negative": 0,
+     "bloom_maybe": 0,
+     "false_positives": 0,
+     "index_lookups": 0,
+     "index_rule_outs": 0,
+     "records_decoded": 0,
+     "bytes_decoded": 0,
+     "blocks_scanned": 0
+    },
+    "miss": {
+     "tables_consulted": 0,
+     "bloom_checks": 0,
+     "bloom_negative": 0,
+     "bloom_maybe": 0,
+     "false_positives": 0,
+     "index_lookups": 0,
+     "index_rule_outs": 0,
+     "records_decoded": 0,
+     "bytes_decoded": 0,
+     "blocks_scanned": 0
+    }
+   },
+   "runs_checked": 5
+  },
+  "100000": {
+   "records": 100000,
+   "tables": 2,
+   "entries_per_table": 37787,
+   "block_accesses": {
+    "hit": 3809,
+    "miss": 2
+   },
+   "cache": {
+    "hits": 1231,
+    "misses": 2580,
+    "insertions": 2580,
+    "evictions": 0,
+    "bytes": 5117480,
+    "entries": 2580,
+    "hit_rate": 0.3230123327210706,
+    "bytes_read": 5117480
+   },
+   "uncached_block_reads": 3811,
+   "uncached_bytes_read": 7558544,
+   "misses_per_phase": {
+    "hit": 2579,
+    "miss": 1
+   },
+   "work": {
+    "hit": {
+     "tables_consulted": 5716,
+     "bloom_checks": 5716,
+     "bloom_negative": 1895,
+     "bloom_maybe": 3821,
+     "false_positives": 12,
+     "index_lookups": 3821,
+     "index_rule_outs": 12,
+     "records_decoded": 32195,
+     "bytes_decoded": 3992180,
+     "blocks_scanned": 3809
+    },
+    "miss": {
+     "tables_consulted": 400,
+     "bloom_checks": 400,
+     "bloom_negative": 398,
+     "bloom_maybe": 2,
+     "false_positives": 2,
+     "index_lookups": 2,
+     "index_rule_outs": 0,
+     "records_decoded": 22,
+     "bytes_decoded": 2728,
+     "blocks_scanned": 2
+    }
+   },
+   "runs_checked": 5
+  },
+  "1000000": {
+   "records": 1000000,
+   "tables": 26,
+   "entries_per_table": 37787,
+   "block_accesses": {
+    "hit": 1959,
+    "miss": 23
+   },
+   "cache": {
+    "hits": 37,
+    "misses": 1945,
+    "insertions": 1945,
+    "evictions": 0,
+    "bytes": 3848960,
+    "entries": 1945,
+    "hit_rate": 0.01866801210898083,
+    "bytes_read": 3848960
+   },
+   "uncached_block_reads": 1982,
+   "uncached_bytes_read": 3918028,
+   "misses_per_phase": {
+    "hit": 1929,
+    "miss": 16
+   },
+   "work": {
+    "hit": {
+     "tables_consulted": 26283,
+     "bloom_checks": 26283,
+     "bloom_negative": 24118,
+     "bloom_maybe": 2165,
+     "false_positives": 206,
+     "index_lookups": 2165,
+     "index_rule_outs": 206,
+     "records_decoded": 16756,
+     "bytes_decoded": 2077744,
+     "blocks_scanned": 1959
+    },
+    "miss": {
+     "tables_consulted": 2600,
+     "bloom_checks": 2600,
+     "bloom_negative": 2577,
+     "bloom_maybe": 23,
+     "false_positives": 23,
+     "index_lookups": 23,
+     "index_rule_outs": 0,
+     "records_decoded": 253,
+     "bytes_decoded": 31372,
+     "blocks_scanned": 23
+    }
+   },
+   "runs_checked": 5
+  },
+  "5000000": {
+   "records": 5000000,
+   "tables": 132,
+   "entries_per_table": 37787,
+   "block_accesses": {
+    "hit": 998,
+    "miss": 60
+   },
+   "cache": {
+    "hits": 15,
+    "misses": 1043,
+    "insertions": 1043,
+    "evictions": 0,
+    "bytes": 2038932,
+    "entries": 1043,
+    "hit_rate": 0.014177693761814745,
+    "bytes_read": 2038932
+   },
+   "uncached_block_reads": 1058,
+   "uncached_bytes_read": 2061872,
+   "misses_per_phase": {
+    "hit": 994,
+    "miss": 49
+   },
+   "work": {
+    "hit": {
+     "tables_consulted": 67341,
+     "bloom_checks": 67341,
+     "bloom_negative": 65823,
+     "bloom_maybe": 1518,
+     "false_positives": 520,
+     "index_lookups": 1518,
+     "index_rule_outs": 520,
+     "records_decoded": 8446,
+     "bytes_decoded": 1047304,
+     "blocks_scanned": 998
+    },
+    "miss": {
+     "tables_consulted": 6600,
+     "bloom_checks": 6600,
+     "bloom_negative": 6540,
+     "bloom_maybe": 60,
+     "false_positives": 60,
+     "index_lookups": 60,
+     "index_rule_outs": 0,
+     "records_decoded": 660,
+     "bytes_decoded": 81840,
+     "blocks_scanned": 60
+    }
+   },
+   "runs_checked": 3
+  },
+  "10000000": {
+   "records": 10000000,
+   "tables": 264,
+   "entries_per_table": 37787,
+   "block_accesses": {
+    "hit": 997,
+    "miss": 116
+   },
+   "cache": {
+    "hits": 20,
+    "misses": 1093,
+    "insertions": 1093,
+    "evictions": 0,
+    "bytes": 2107752,
+    "entries": 1093,
+    "hit_rate": 0.017969451931716084,
+    "bytes_read": 2107752
+   },
+   "uncached_block_reads": 1113,
+   "uncached_bytes_read": 2135652,
+   "misses_per_phase": {
+    "hit": 996,
+    "miss": 97
+   },
+   "work": {
+    "hit": {
+     "tables_consulted": 135243,
+     "bloom_checks": 135243,
+     "bloom_negative": 133176,
+     "bloom_maybe": 2067,
+     "false_positives": 1070,
+     "index_lookups": 2067,
+     "index_rule_outs": 1070,
+     "records_decoded": 8583,
+     "bytes_decoded": 1064292,
+     "blocks_scanned": 997
+    },
+    "miss": {
+     "tables_consulted": 13200,
+     "bloom_checks": 13200,
+     "bloom_negative": 13084,
+     "bloom_maybe": 116,
+     "false_positives": 116,
+     "index_lookups": 116,
+     "index_rule_outs": 0,
+     "records_decoded": 1276,
+     "bytes_decoded": 158224,
+     "blocks_scanned": 116
+    }
+   },
+   "runs_checked": 3
+  }
+ },
+ "locality": {
+  "work": {
+   "tables_consulted": 2630257,
+   "bloom_checks": 2630257,
+   "bloom_negative": 2410198,
+   "bloom_maybe": 220059,
+   "false_positives": 20059,
+   "index_lookups": 220059,
+   "index_rule_outs": 20059,
+   "blocks_scanned": 200000,
+   "records_decoded": 1700582,
+   "bytes_decoded": 210872168
+  },
+  "configs": {
+   "v4": {
+    "hits": 0,
+    "misses": 200000,
+    "insertions": 0,
+    "evictions": 0,
+    "bytes": 0,
+    "entries": 0,
+    "hit_rate": 0.0,
+    "bytes_read": 396795040,
+    "capacity_bytes": null
+   },
+   "v5_0": {
+    "hits": 0,
+    "misses": 200000,
+    "insertions": 0,
+    "evictions": 0,
+    "bytes": 0,
+    "entries": 0,
+    "hit_rate": 0.0,
+    "bytes_read": 396795040,
+    "capacity_bytes": 0
+   },
+   "v5_256KiB": {
+    "hits": 21028,
+    "misses": 178972,
+    "insertions": 178972,
+    "evictions": 178840,
+    "bytes": 261888,
+    "entries": 132,
+    "hit_rate": 0.10514,
+    "bytes_read": 355075488,
+    "capacity_bytes": 262144
+   },
+   "v5_1MiB": {
+    "hits": 82616,
+    "misses": 117384,
+    "insertions": 117384,
+    "evictions": 116856,
+    "bytes": 1047552,
+    "entries": 528,
+    "hit_rate": 0.41308,
+    "bytes_read": 232884896,
+    "capacity_bytes": 1048576
+   },
+   "v5_2MiB": {
+    "hits": 151884,
+    "misses": 48116,
+    "insertions": 48116,
+    "evictions": 47059,
+    "bytes": 2097088,
+    "entries": 1057,
+    "hit_rate": 0.75942,
+    "bytes_read": 95457184,
+    "capacity_bytes": 2097152
+   },
+   "v5_4MiB": {
+    "hits": 178990,
+    "misses": 21010,
+    "insertions": 21010,
+    "evictions": 18896,
+    "bytes": 4193556,
+    "entries": 2114,
+    "hit_rate": 0.89495,
+    "bytes_read": 41678880,
+    "capacity_bytes": 4194304
+   },
+   "v5_8MiB": {
+    "hits": 179000,
+    "misses": 21000,
+    "insertions": 21000,
+    "evictions": 16772,
+    "bytes": 8387112,
+    "entries": 4228,
+    "hit_rate": 0.895,
+    "bytes_read": 41659040,
+    "capacity_bytes": 8388608
+   }
+  }
+ }
+}

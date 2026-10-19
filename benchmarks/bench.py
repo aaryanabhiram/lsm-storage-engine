@@ -1,30 +1,30 @@
-"""V4 benchmark: V3 plus a Bloom filter in every SSTable (10 bits per key, 7 hashes). Methodology: docs/benchmarks.md.
+"""V5 benchmark: V4 plus an LRU block cache (default 8 MiB). Methodology: docs/benchmarks.md.
 
 Usage:
-    python benchmarks/bench.py --scales 10000 --out PATH       # scaling runs for the listed scales
+    python benchmarks/bench.py --scales 10000 --out PATH       # standard-workload runs for the listed scales
     python benchmarks/bench.py --baseline --out PATH           # 10,000-key head-to-head workloads
+    python benchmarks/bench.py --locality --out PATH           # controlled cache-locality workload
     python benchmarks/bench.py --analyze-only --out FINAL.json
 
-The protocol is V3's (py, which is V2's): same seed, keys, values, workloads, scale ladder, run counts, GET
-sample counts, 4 MiB memtable limit, timing boundary (only the store call is timed, one perf_counter_ns pair per
-operation) and percentile code. Only the store under test changes (KVStore with its defaults: sparse index interval
-16, 10 Bloom bits per key, 7 hashes). The V0..V3 results (benchmarks/results/*.json) are read, never written.
-All numbers are WARM OS-CACHE numbers.
+Two workloads, never mixed in one table:
 
-No production code is changed. Flush boundaries are observed by wrapping the instance's `flush` method and the
-module-level `lsm_store.sstable.write_sstable`. Read work is counted untimed by wrapping `SSTable.lookup`,
-`SSTable.may_contain`, `SSTable.locate`, `SSTable._scan_block`, `sstable._open_table` and the record reader. After the
-timed phases of a run (so that nothing timed is affected) untimed passes decompose the cost of one table lookup
-(Bloom check, index search, file open, block read), validate the Bloom invariant on every table, probe the false-positive
-rate with keys known to be absent, and measure the filters' retained memory.
+* STANDARD (comparability with V0..V4). The timed protocol is V4's: `v4_run` and `baseline_run`
+  are executed unchanged with the V5 `KVStore` (default 8 MiB cache). Same seed, keys, values, sample counts, scale ladder, run counts, 4 MiB memtable limit, timing
+  boundary and percentile code. Added around it, outside every timed interval: `timed_get` is replaced by a
+  function that reads the cache's hit/miss counters before and after (never inside) the `perf_counter_ns` pair and keeps
+  each GET's result checksum; untimed replays of the same GET sequence with counters on `SSTable._read_block` and
+  `sstable._open_table`; untimed memory probes in fresh processes.
+* LOCALITY (controlled, V5-specific): a fixed 1,000,000-key database whose GETs repeatedly revisit a small set of flushed
+  SSTable blocks. Design in LOCALITY below and in docs/benchmarks.md.
+
+No production code is changed. All numbers are WARM OS-CACHE numbers. The V0..V4 results are read, never written.
 """
 
-
+import math
 import argparse
 import gc
 import hashlib
 import json
-import math
 import os
 import platform
 import random
@@ -37,15 +37,18 @@ import time
 import tracemalloc
 import zlib
 from array import array
+from contextlib import contextmanager
 from pathlib import Path
 
 import lsm_store.sstable as sstable_module
-from lsm_store import KVStore, bloom
+from lsm_store import KVStore
+from lsm_store.blockcache import DEFAULT_BLOCK_CACHE_BYTES, BlockCache
 from lsm_store.record import HEADER_SIZE
-from lsm_store.sstable import FOOTER_V4_SIZE, NOT_FOUND, SSTable
+from lsm_store.sstable import NOT_FOUND, SSTable
 from lsm_store.store import DEFAULT_MEMTABLE_LIMIT_BYTES
-from lsm_store.store import DEFAULT_INDEX_INTERVAL
-from lsm_store.store import DEFAULT_BLOOM_BITS_PER_KEY
+from lsm_store import KVStore, bloom
+from lsm_store.sstable import FOOTER_V4_SIZE
+from lsm_store.store import DEFAULT_BLOOM_BITS_PER_KEY, DEFAULT_INDEX_INTERVAL
 from lsm_store.wal import replay
 
 # ---- helpers (the same ones the earlier stages used) ------------------------
@@ -135,17 +138,6 @@ def aggregate(runs):
     return agg
 
 
-def ols(xs, ys):
-    """Least squares y = a + b x; returns (a, b, r2)."""
-    mx, my = statistics.fmean(xs), statistics.fmean(ys)
-    sxx = sum((x - mx) ** 2 for x in xs)
-    b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
-    a = my - b * mx
-    ss_res = sum((y - (a + b * x)) ** 2 for x, y in zip(xs, ys))
-    ss_tot = sum((y - my) ** 2 for y in ys)
-    return a, b, (1 - ss_res / ss_tot) if ss_tot else None  # R^2 undefined for a constant series
-
-
 def ram_bytes():
     """(total, available) physical RAM on Windows, or None elsewhere."""
     if sys.platform != "win32":
@@ -179,7 +171,6 @@ SEED = 42
 # independent runs per scale (fresh database each): the V0 ladder, 5/5/5/3/3 (V0_SCALES[records]["runs"])
 N_DELETES = 1000  # timed DELETEs of keys drawn uniformly from the keyspace (may repeat), per run
 MEMORY_PROBES = 3  # untimed probes per scale
-DELETE_RECORD_BYTES = HEADER_SIZE + len(key_of(0))  # 24: a DELETE record carries no value
 
 
 def delete_keys(records, seed=SEED):
@@ -359,14 +350,6 @@ def scale_entry(records, limit, n_hits, n_misses, runs, memory):
     }
 
 
-def fit(n, size, values):
-    _, slope, r2_log = ols([math.log(x) for x in size], [math.log(y) for y in values])
-    a, b, r2 = ols(n, values)
-    return {"values": values, "loglog_slope": slope, "loglog_r2": r2_log, "linear_intercept": a,
-            "linear_per_record": b, "linear_r2": r2, "ratio_largest_over_smallest": values[-1] / values[0],
-            "records_ratio": n[-1] / n[0]}
-
-
 INDEX_ENTRY_BYTES = 4 + 8 + len(key_of(0))  # key_len(4) + offset(8) + key(11) = 23
 DECOMP_REPS_MISS = 20  # repetitions of the per-table cost decomposition over all tables (miss key)
 DECOMP_REPS_HIT = 10  # repetitions over the sampled (table, hit key) pairs
@@ -384,16 +367,6 @@ def index_bytes(count, interval=DEFAULT_INDEX_INTERVAL):
 
 def pct_change(new, old):
     return (new / old - 1) * 100
-
-
-def percentile_nearest_rank(sorted_vals, q):
-    return sorted_vals[max(0, math.ceil(q * len(sorted_vals)) - 1)]
-
-
-def dist(vals):
-    s = sorted(vals)
-    return {"n": len(s), "mean": statistics.fmean(s), "median": statistics.median(s),
-            "p95": percentile_nearest_rank(s, 0.95), "max": s[-1], "min": s[0]}
 
 
 def write_row(s):
@@ -428,33 +401,6 @@ def write_row(s):
     return row
 
 
-def percentile_nearest_rank(sorted_vals, q):
-    return sorted_vals[max(0, math.ceil(q * len(sorted_vals)) - 1)]
-
-
-def dist(vals):
-    s = sorted(vals)
-    return {"n": len(s), "mean": statistics.fmean(s), "median": statistics.median(s),
-            "p95": percentile_nearest_rank(s, 0.95), "max": s[-1], "min": s[0]}
-
-
-def v3_read_work_summary(sc):
-    """V3 work per GET by category, over the instrumented sample GETs of all runs at a scale. Row layout:
-    [category, tables_consulted, tables_skipped_by_index, blocks_read, records_decoded, bytes_decoded]."""
-    groups = {}
-    for run in sc["runs"]:
-        for kind in ("hit", "miss"):
-            for row in run["read_work"][kind]:
-                groups.setdefault(row[0], []).append(row)
-                if kind == "hit":
-                    groups.setdefault("all_hits", []).append(row)
-    names = ("tables_consulted", "tables_skipped_by_index", "blocks_read", "records_decoded", "bytes_decoded")
-    return {cat: {"gets": len(rows), **{name: dist([r[i + 1] for r in rows]) for i, name in enumerate(names)}}
-            for cat, rows in groups.items()}
-
-# ---- protocol: identical to V3's, which reuses V2's and V0's ladder ------------------------------------------------
-SCALES = list(V0_SCALES)
-RESULTS = ROOT / "benchmarks/results"
 BITS_PER_KEY = DEFAULT_BLOOM_BITS_PER_KEY  # 10
 NUM_HASHES = bloom.num_hashes(BITS_PER_KEY)  # 7
 STRUCT_MISSES_V4 = 50  # instrumented miss GETs per run (V3 instrumented 3: a V3 miss decodes thousands of records)
@@ -794,46 +740,6 @@ def table_memory(paths):
             if entries else None}
 
 
-# ---- memory probes ---------------------------------------------------------------------------
-def memory_probe(mode, records, path, limit):
-    """Run inside a fresh process. 'load': build a V4 database of `records` keys; 'open': recover an existing one."""
-    gc.collect()
-    before = process_memory()
-    db = KVStore(path, sync=False, memtable_limit_bytes=limit)
-    if mode == "load":
-        rng = random.Random(SEED)
-        for i in range(records):
-            db.put(key_of(i), rng.randbytes(VALUE_SIZE))
-    gc.collect()
-    after = process_memory()
-    out = {"mode": mode, "records": records, "before": before, "after": after, "tables": len(db._sstables),
-           "index_entries": sum(len(t._keys) for t in db._sstables),
-           "filter_bytes": sum(t.filter_len for t in db._sstables),
-           "memtable_entries": len(db._memtable), "memtable_payload_bytes": db._mem_bytes,
-           "persistent": dir_state(path)}
-    db.close()
-    return out
-
-
-def run_memory_probe(records, limit):
-    with tempfile.TemporaryDirectory() as d:
-        path = os.path.join(d, "db")
-        out = {}
-        for mode in ("load", "open"):
-            cmd = [sys.executable, str(Path(__file__).resolve()), "--probe", mode, "--probe-records", str(records),
-                   "--probe-path", path, "--probe-limit", str(limit)]
-            proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            out[mode] = json.loads(proc.stdout.strip().splitlines()[-1])
-    return {mode: {"private_delta": p["after"]["private"] - p["before"]["private"],
-                   "working_set_delta": p["after"]["working_set"] - p["before"]["working_set"],
-                   "peak_working_set_after": p["after"]["peak_working_set"],
-                   "private_after": p["after"]["private"], "private_before": p["before"]["private"],
-                   "tables": p["tables"], "index_entries": p["index_entries"], "filter_bytes": p["filter_bytes"],
-                   "memtable_entries": p["memtable_entries"],
-                   "memtable_payload_bytes": p["memtable_payload_bytes"], "persistent": p["persistent"]}
-            for mode, p in out.items()}
-
-
 # ---- V4 scaling run --------------------------------------------------------------------------
 def open_components(path):
     """Re-run the steps of KVStore.__init__ (inherited from V2) with the module's own functions to split the open
@@ -870,6 +776,10 @@ def open_components(path):
             "memtable_entries_replayed": replayed, "index_bytes_read": sum(s[3] for s in spans),
             "index_entries_loaded": sum(len(t._keys) for t in tables),
             "filter_bytes_read": sum(s[4] for s in spans), "footer_bytes_read": len(tables) * FOOTER_V4_SIZE}
+
+
+# The V5 standard run swaps this for a timer that also records the cache outcome of every GET.
+timed_get = timed_call
 
 
 def v4_run(records, limit, n_hits, n_misses, v0_gets, probe_fpr):
@@ -933,12 +843,12 @@ def v4_run(records, limit, n_hits, n_misses, v0_gets, probe_fpr):
         # GETs (timed). Every result is checked after the timed call.
         hit_lat = array("q")
         for idx, k in zip(hit_idx, hit_keys):
-            ns, got = timed_call(db.get, k)
+            ns, got = timed_get(db.get, k)
             assert got == expected_hit[idx], f"GET hit returned wrong value for index {idx}"
             hit_lat.append(ns)
         miss_lat = array("q")
         for k in miss_keys:
-            ns, got = timed_call(db.get, k)
+            ns, got = timed_get(db.get, k)
             assert got is None, f"GET miss returned a value for {k!r}"
             miss_lat.append(ns)
         raw["get_hit"], raw["get_miss"] = hit_lat, miss_lat
@@ -1063,7 +973,7 @@ def baseline_run(wl, limit):
             def get_all(keys):
                 lats = []
                 for k in keys:
-                    ns, got = timed_call(db.get, k)
+                    ns, got = timed_get(db.get, k)
                     assert got == ref.get(k), "GET disagrees with the reference dict"
                     lats.append(ns)
                 return lats
@@ -1075,7 +985,7 @@ def baseline_run(wl, limit):
             mixed_writes = {"put": WriteStats(), "delete": WriteStats()}
             for n, (op, k, v) in enumerate(wl["mixed"]):
                 if op == "get":
-                    ns, got = timed_call(db.get, k)
+                    ns, got = timed_get(db.get, k)
                     assert got == ref.get(k), "mixed GET disagrees with the reference dict"
                 else:
                     stats = mixed_writes[op]
@@ -1143,281 +1053,640 @@ def baseline_entry(wl_args, runs, limit):
             "runs": [{"summary": r["summary"], "write_split": r["write_split"],
                       "flushes_put_load": r["flushes_put_load"]} for r in res]}
 
+SCALES = list(V0_SCALES)
+RESULTS = ROOT / "benchmarks/results"
+BLOCK_RECORDS = 16  # the sparse-index interval: records per block
 
-# ---- analysis --------------------------------------------------------------------------------
-def v3_reference():
-    return json.loads((RESULTS / "v3_benchmark.json").read_text())
+# ---- controlled locality workload (design is fixed here, before any measurement) ---------------------------------
+KIB = 1024
+LOCALITY = {
+    "records": 1_000_000,       # loaded keys: 26 flushed tables of 37,787 records (61,412 blocks) + a 17,538-key memtable
+    "ops": 200_000,             # GETs per configuration per run
+    "hot_blocks": 1_000,        # hot set: 1,000 distinct flushed blocks (1,000 x 1,984 B = 1,984,000 B)
+    "hot_fraction": 0.9,        # 180,000 GETs go to the hot set (uniform over its blocks; a random key within the block)
+    "seed": 42 + 5,             # SEED + 5; load values come from the standard Random(SEED) stream
+    "runs": 5,                  # fresh database per run; each run measures every configuration
+}
+# (name, block cache bytes); 0 = the cache is switched off.
+CONFIGS = [("v5_0", 0), ("v5_256KiB", 256 * KIB), ("v5_1MiB", 1024 * KIB), ("v5_2MiB", 2048 * KIB),
+           ("v5_4MiB", 4096 * KIB), ("v5_8MiB", DEFAULT_BLOCK_CACHE_BYTES)]
+OUT_NONE, OUT_HIT, OUT_MISS = 0, 1, 2  # per-GET cache outcome: no cache access / block served from cache / block read
 
 
-def read_work_summary(sc):
-    """V4 work per GET by category over the instrumented GETs of all runs at a scale: per field a distribution, plus
-    the Bloom totals. Row layout: [category] + WORK_FIELDS."""
-    groups = {}
-    for run in sc["runs"]:
-        for kind in ("hit", "miss"):
-            for row in run["read_work"][kind]:
-                groups.setdefault(row[0], []).append(row)
-                if kind == "hit":
-                    groups.setdefault("all_hits", []).append(row)
-    out = {}
-    for cat, rows in groups.items():
-        entry = {"gets": len(rows), **{name: dist([r[i + 1] for r in rows]) for i, name in enumerate(WORK_FIELDS)}}
-        totals = {name: sum(r[i + 1] for r in rows) for i, name in enumerate(WORK_FIELDS)}
-        # A GET that was answered by a table has exactly one table that holds the key: its "maybe" is a true positive.
-        true_positive_checks = sum(1 for r in rows if r[0] != "miss" and r[0] != "memtable_hit")
-        absent_checks = totals["bloom_checks"] - true_positive_checks
-        entry["totals"] = totals
-        entry["true_positive_checks"] = true_positive_checks
-        entry["absent_key_checks"] = absent_checks
-        entry["skip_rate"] = totals["bloom_negative"] / totals["bloom_checks"] if totals["bloom_checks"] else None
-        entry["false_positive_rate_on_absent_checks"] = (totals["false_positives"] / absent_checks
-                                                         if absent_checks else None)
-        out[cat] = entry
+class _NoCache:
+    hits = misses = 0
+
+
+def cache_of(db):
+    """The store's block cache, or a counter stub for a store without one. (Not `or`: an empty BlockCache is falsy.)"""
+    cache = getattr(db, "_block_cache", None)
+    return _NoCache if cache is None else cache
+
+
+# ---- result checksums and per-GET cache outcome (recorded outside every timed interval) -------------------------
+def crc_of(value):
+    return -1 if value is None else zlib.crc32(value)
+
+
+class Capture:
+    """Per-run record of every timed GET's cache outcome and result checksum, in call order."""
+
+    def __init__(self):
+        self.outcome = array("b")
+        self.crc = array("q")
+
+
+def make_timed_call(capture):
+    def timed_call(fn, *args):
+        cache = cache_of(fn.__self__)
+        h0, m0 = cache.hits, cache.misses  # before the clock starts
+        t0 = time.perf_counter_ns()
+        result = fn(*args)
+        ns = time.perf_counter_ns() - t0
+        capture.outcome.append(OUT_MISS if cache.misses > m0 else OUT_HIT if cache.hits > h0 else OUT_NONE)
+        capture.crc.append(crc_of(result))
+        return ns, result
+
+    return timed_call
+
+
+# ---- untimed read-work counters --------------------------------------------------------------------------------
+COUNTERS = ("tables_consulted", "bloom_checks", "bloom_negative", "bloom_maybe", "false_positives", "index_lookups",
+            "index_rule_outs", "blocks_scanned", "block_reads", "open_table_calls", "bytes_read", "records_decoded",
+            "bytes_decoded")
+
+
+class Counting:
+    """Context manager wrapping SSTable.lookup / may_contain / locate / _scan_block / _read_block,
+    sstable._open_table and the record reader with counters (class and module attributes are restored on exit).
+
+    block_reads      SSTable._read_block calls: the physical block reads (a cache miss on an indexed table)
+    open_table_calls sstable._open_table calls: every file open of a table's record region
+    bytes_read       bytes those block reads returned
+    blocks_scanned   SSTable._scan_block calls (one cache lookup each)
+    records/bytes_decoded  counted in the record reader (a cache hit still decodes)"""
+
+    def __init__(self):
+        self.c = dict.fromkeys(COUNTERS, 0)
+
+    def snap(self):
+        return tuple(self.c[k] for k in COUNTERS)
+
+    def __enter__(self):
+        c = self.c
+        self._orig = (SSTable.lookup, SSTable.may_contain, SSTable.locate, SSTable._scan_block, SSTable._read_block,
+                      sstable_module._open_table, sstable_module.read_records)
+        real_lookup, real_may, real_locate, real_scan, real_read_block, real_open, real_records = self._orig
+        state = {"maybe": None}
+
+        def lookup(table, key):
+            c["tables_consulted"] += 1
+            state["maybe"] = None
+            found = real_lookup(table, key)
+            if state["maybe"] and found is NOT_FOUND:
+                c["false_positives"] += 1
+            return found
+
+        def may_contain(table, key):
+            answer = real_may(table, key)
+            c["bloom_checks"] += 1
+            c["bloom_maybe" if answer else "bloom_negative"] += 1
+            state["maybe"] = answer
+            return answer
+
+        def locate(table, key):
+            found = real_locate(table, key)
+            c["index_lookups"] += 1
+            if found is None:
+                c["index_rule_outs"] += 1
+            return found
+
+        def scan_block(table, *args):
+            c["blocks_scanned"] += 1
+            return real_scan(table, *args)
+
+        def read_block(table, start, end):
+            data = real_read_block(table, start, end)
+            c["block_reads"] += 1
+            c["bytes_read"] += len(data)
+            return data
+
+        def open_table(path):
+            c["open_table_calls"] += 1
+            return real_open(path)
+
+        def counting(f):
+            for rec in real_records(f):
+                c["records_decoded"] += 1
+                c["bytes_decoded"] += HEADER_SIZE + len(rec.key) + len(rec.value or b"")
+                yield rec
+
+        (SSTable.lookup, SSTable.may_contain, SSTable.locate, SSTable._scan_block, SSTable._read_block,
+         sstable_module._open_table, sstable_module.read_records) = (lookup, may_contain, locate, scan_block,
+                                                                     read_block, open_table, counting)
+        return self
+
+    def __exit__(self, *exc):
+        (SSTable.lookup, SSTable.may_contain, SSTable.locate, SSTable._scan_block, SSTable._read_block,
+         sstable_module._open_table, sstable_module.read_records) = self._orig
+
+
+@contextmanager
+def swapped_cache(db, capacity):
+    """Give every open table of `db` a fresh, empty BlockCache of `capacity` bytes for the duration (the store's own
+    cache and its counters are untouched). External: assigns an instance attribute only."""
+    cache = BlockCache(capacity)
+    saved = [(t, t._cache) for t in db._sstables]
+    for t, _ in saved:
+        t._cache = cache
+    try:
+        yield cache
+    finally:
+        for t, old in saved:
+            t._cache = old
+
+
+def cache_counters(cache):
+    s = cache.stats()
+    return {k: s[k] for k in ("capacity_bytes", "bytes", "entries", "hits", "misses", "insertions", "evictions",
+                              "hit_rate")}
+
+
+def replay_keys(db, cache, counting, keys):
+    """GET every key in order (untimed). Returns the per-GET classification and result checksums, and checks the
+    structural invariants on every GET. A GET may touch several tables (each Bloom "maybe" that passes the index is one
+    block access), so the invariants are per GET: block reads == file opens == cache misses; and a GET whose block
+    accesses were all cache hits (no miss) opened no file and read no block.
+    Classes: `cache_hit` = at least one block access and every one a hit; `cache_miss` = at least one physical block
+    read; `no_cache_access` = answered by the memtable or ruled out by the filters/index."""
+    crcs = array("q")
+    n_hit = n_miss = n_none = 0
+    hit_with_read = hit_with_open = reads_ne_misses = reads_without_access = 0
+    c = counting.c
+    for key in keys:
+        h0, m0, r0, o0 = cache.hits, cache.misses, c["block_reads"], c["open_table_calls"]
+        got = db.get(key)
+        crcs.append(crc_of(got))
+        dh, dm, dr, do = cache.hits - h0, cache.misses - m0, c["block_reads"] - r0, c["open_table_calls"] - o0
+        reads_ne_misses += not (dr == dm == do)
+        if dm:
+            n_miss += 1
+        elif dh:
+            n_hit += 1
+            hit_with_read += dr != 0
+            hit_with_open += do != 0
+        else:
+            n_none += 1
+            reads_without_access += dr != 0 or do != 0
+    return {"gets": len(keys), "cache_hit_gets": n_hit, "cache_miss_gets": n_miss, "no_cache_access_gets": n_none,
+            "hit_gets_with_block_read": hit_with_read, "hit_gets_with_file_open": hit_with_open,
+            "gets_with_reads_not_equal_misses": reads_ne_misses, "reads_without_cache_access": reads_without_access,
+            "crc": crcs}
+
+
+# ---- standard workload: V4's run, with V5 substituted ------------------------------------------------------------
+def v5_standard_run(records, limit, n_hits, n_misses, v0_gets):
+    """v4_run, unchanged, against KVStore. See the module docstring for what is added around it."""
+    global timed_get, measure_read_work, decompose, find_fp_pairs  # v4_run looks these up as module globals
+    _, hit_idx, _, miss_keys, _ = workload(records, n_hits, n_misses, v0_gets)
+    hit_keys = [key_of(i) for i in hit_idx]
+    capture = Capture()
+    extra = {}
+    real_sample = measure_read_work
+
+    def sample_hook(db, keys):
+        """Called by v4_run once, for hits, and once for misses, after both timed GET phases and before anything
+        else mutates the store. The first call does the cache accounting; both return V4's structural sample."""
+        if "cache_after_timed_gets" not in extra:
+            extra.update(cache_accounting(db, capture, hit_keys, miss_keys))
+        with swapped_cache(db, db.block_cache.capacity_bytes):  # a cold cache, so the sample is V4-comparable
+            return real_sample(db, keys)
+
+    saved = (timed_get, measure_read_work, decompose, find_fp_pairs)
+    timed_get, measure_read_work = make_timed_call(capture), sample_hook
+    decompose = lambda *a, **k: None  # V4's Bloom cost decomposition: not a V5 question, and it would touch the cache
+    find_fp_pairs = lambda tables: []
+    try:
+        run = v4_run(records, limit, n_hits, n_misses, v0_gets, False)
+    finally:
+        timed_get, measure_read_work, decompose, find_fp_pairs = saved
+    assert len(capture.outcome) == n_hits + n_misses, "timed GET count differs from the protocol"
+    split = {}
+    raw_split = {}
+    for phase, lo, hi in (("get_hit", 0, n_hits), ("get_miss", n_hits, n_hits + n_misses)):
+        lat, outc = run["_raw"][phase], capture.outcome[lo:hi]
+        assert len(lat) == len(outc)
+        groups = {"all": list(range(len(lat))), "cache_hit": [], "cache_miss": [], "no_cache_access": []}
+        for i, o in enumerate(outc):
+            groups[("no_cache_access", "cache_hit", "cache_miss")[o]].append(i)
+        split[phase] = {g: {"gets": len(ix), "summary": full_summary([lat[i] for i in ix]) if ix else None}
+                        for g, ix in groups.items()}
+        raw_split[phase] = {g: array("q", (lat[i] for i in ix)) for g, ix in groups.items()}
+    run["cache"] = {**extra, "outcome_counts": {phase: {g: v["gets"] for g, v in split[phase].items()}
+                                                for phase in split},
+                    "latency_by_outcome": split, "capacity_bytes": DEFAULT_BLOCK_CACHE_BYTES}
+    run["_raw_split"] = raw_split
+    return run
+
+
+def cache_accounting(db, capture, hit_keys, miss_keys):
+    """After the timed GET phases (hit keys, then miss keys, from an empty cache): the live cache's counters, then
+    two untimed replays of the same GET sequence. (1) Cached: a fresh cache of the same capacity. Its counters must
+    equal the timed run's (the run is deterministic) and its block reads must equal its cache misses. (2) Uncached
+    (capacity 0): every block access is a physical read; results must equal the timed run's results."""
+    n_hits = len(hit_keys)
+    live = cache_counters(db.block_cache)
+    timed_crc = capture.crc
+    out = {"cache_after_timed_gets": live, "memtable_entries": len(db._memtable), "sstables": len(db._sstables),
+           "sstable_bytes": sum(os.path.getsize(t.path) for t in db._sstables)}
+    for name, capacity in (("cached", db.block_cache.capacity_bytes), ("uncached", 0)):
+        with swapped_cache(db, capacity) as cache, Counting() as counting:
+            phases = {}
+            for phase, keys, lo in (("hit", hit_keys, 0), ("miss", miss_keys, n_hits)):
+                before = counting.snap()
+                r = replay_keys(db, cache, counting, keys)
+                assert r["crc"] == timed_crc[lo:lo + len(keys)], f"{name} replay returned different values ({phase})"
+                r.pop("crc")
+                phases[phase] = {**r, **{k: v - b for k, v, b in zip(COUNTERS, counting.snap(), before)}}
+            total = dict(counting.c)
+            stats = cache_counters(cache)
+        assert total["blocks_scanned"] == stats["hits"] + stats["misses"], "a block scan skipped the cache"
+        assert total["block_reads"] == stats["misses"] == total["open_table_calls"], "block reads != cache misses"
+        assert all(p["hit_gets_with_block_read"] == p["hit_gets_with_file_open"] == p["reads_without_cache_access"]
+                   == p["gets_with_reads_not_equal_misses"] == 0 for p in phases.values()), "cache invariant violated"
+        if name == "cached":
+            assert stats == live, "replay cache counters differ from the timed run's"
+        else:
+            assert stats["hits"] == 0 and total["block_reads"] == total["blocks_scanned"]
+        out[name] = {"cache": stats, "totals": total, "phases": phases}
     return out
 
 
-def analyze(result):
-    v3 = v3_reference()
-    sc = [result["scales"][k] for k in sorted(result["scales"], key=int)
-          if result["scales"][k]["runs_completed"] == result["scales"][k]["runs_planned"]]
-    out = {"scales_used": [s["records"] for s in sc]}
-    if len(sc) < 2:
-        return out
-    n = [s["records"] for s in sc]
-    s3 = [v3["scales"][str(r)] for r in n]
-    tables = [s["runs"][0]["state"]["after_load"]["sst_files"] for s in sc]
-    assert tables == [e["runs"][0]["state"]["after_load"]["sst_files"] for e in s3], "table layout differs from V3"
-    out["sstables_after_load"] = tables
+def v5_standard_entry(records, limit, n_hits, n_misses, n_runs):
+    runs = []
+    for i in range(n_runs):
+        print(f"scale {records:>10,} V5 run {i + 1}/{n_runs} ...", flush=True)
+        t0 = time.perf_counter()
+        runs.append(v5_standard_run(records, limit, n_hits, n_misses, V0_SCALES[records]["gets_per_kind"]))
+        r = runs[-1]
+        s, c = r["summary"], r["cache"]["cache_after_timed_gets"]
+        print(f"  done in {time.perf_counter() - t0:.0f}s  flushes={len(r['flushes']['put_load'])}  "
+              f"open={r['open_recovery_ns'] / 1e9:.3f}s  hit p50={s['get_hit']['p50_us']:.1f}us  "
+              f"miss p50={s['get_miss']['p50_us']:.1f}us  cache hits/misses={c['hits']}/{c['misses']}  "
+              f"put max={r['put_load_max_ns'] / 1e6:.1f}ms", flush=True)
+    memory = []
+    for i in range(MEMORY_PROBES):
+        print(f"scale {records:>10,} memory probe {i + 1}/{MEMORY_PROBES} ...", flush=True)
+        memory.append(run_memory_probe(records, limit, n_hits, n_misses, V0_SCALES[records]["gets_per_kind"]))
+    entry = scale_entry(records, limit, n_hits, n_misses, runs, memory)
+    entry["runs_planned"] = n_runs
+    entry["index_interval"] = 16
+    entry["bloom_bits_per_key"] = BITS_PER_KEY
+    entry["block_cache_bytes"] = DEFAULT_BLOCK_CACHE_BYTES
+    entry["pooled_get_by_cache_outcome"] = {
+        phase: {g: (full_summary(array("q", (x for r in runs for x in r["_raw_split"][phase][g])))
+                    if any(len(r["_raw_split"][phase][g]) for r in runs) else None)
+                for g in ("all", "cache_hit", "cache_miss", "no_cache_access")}
+        for phase in ("get_hit", "get_miss")}
+    return entry
 
-    # ---- GET latency, V4 vs V3 ----
-    for kind in ("get_hit", "get_miss"):
-        for p in ("p50_us", "p95_us", "p99_us", "mean_us"):
-            a = [s["pooled_all_runs"][kind][p] for s in sc]
-            b = [e["pooled_all_runs"][kind][p] for e in s3]
-            out[f"{kind}_{p}"] = {"v4_us": a, "v3_us": b, "v4_over_v3": [x / y for x, y in zip(a, b)],
-                                  "v3_over_v4": [y / x for x, y in zip(a, b)],
-                                  "change_percent": [pct_change(x, y) for x, y in zip(a, b)]}
-        out[f"{kind}_p50_run_medians_us"] = {
-            "v4": [[r["summary"][kind]["p50_us"] for r in s["runs"]] for s in sc],
-            "v3": [[r["summary"][kind]["p50_us"] for r in e["runs"]] for e in s3]}
-        spread = lambda m: (m["max"] - m["min"]) / m["median"]  # noqa: E731
-        out[f"{kind}_p50_between_run_spread"] = {
-            "v4": [spread(s["aggregate_over_runs"][kind]["p50_us"]) for s in sc],
-            "v3": [spread(e["aggregate_over_runs"][kind]["p50_us"]) for e in s3]}
-        withtab = [i for i, t in enumerate(tables) if t > 0]
-        if len(withtab) >= 2:
-            v4p50 = out[f"{kind}_p50_us"]["v4_us"]
-            v3p50 = out[f"{kind}_p50_us"]["v3_us"]
-            nn = [n[i] for i in withtab]
-            tt = [tables[i] for i in withtab]
-            out[f"{kind}_p50_v4_fit_vs_records"] = fit(nn, nn, [v4p50[i] for i in withtab])
-            out[f"{kind}_p50_v3_fit_vs_records"] = fit(nn, nn, [v3p50[i] for i in withtab])
-            out[f"{kind}_p50_v4_fit_vs_sstables"] = fit(tt, tt, [v4p50[i] for i in withtab])
-            out[f"{kind}_p50_v3_fit_vs_sstables"] = fit(tt, tt, [v3p50[i] for i in withtab])
-            out[f"{kind}_p50_per_sstable_us"] = {"v4": [v4p50[i] / tables[i] for i in withtab],
-                                                 "v3": [v3p50[i] / tables[i] for i in withtab],
-                                                 "scales": nn}
-    out["get_samples_pooled"] = {"hit": [s["pooled_all_runs"]["get_hit"]["ops"] for s in sc],
-                                 "miss": [s["pooled_all_runs"]["get_miss"]["ops"] for s in sc]}
 
-    # ---- structural read work (instrumented sample), V4 vs V3 ----
-    out["read_work_v4"] = [read_work_summary(s) for s in sc]
-    out["read_work_v3"] = [v3_read_work_summary(e) for e in s3]
-    cmp_rows = []
-    for w4, w3 in zip(out["read_work_v4"], out["read_work_v3"]):
-        row = {}
-        for kind, key in (("hit", "all_hits"), ("miss", "miss")):
-            if key not in w4 or key not in w3:
-                row[kind] = None
-                continue
-            a, b = w4[key], w3[key]
-            row[kind] = {
-                "tables_consulted_v4": a["tables_consulted"]["mean"], "tables_consulted_v3": b["tables_consulted"]["mean"],
-                "tables_opened_v4": a["tables_opened"]["mean"], "tables_opened_v3": b["blocks_read"]["mean"],
-                "index_lookups_v4": a["index_lookups"]["mean"],
-                "index_rule_outs_v4": a["index_rule_outs"]["mean"],
-                "index_rule_outs_v3": b["tables_skipped_by_index"]["mean"],
-                "records_v4": a["records_decoded"]["mean"], "records_v3": b["records_decoded"]["mean"],
-                "bytes_v4": a["bytes_decoded"]["mean"], "bytes_v3": b["bytes_decoded"]["mean"],
-                "bloom_checks_v4": a["bloom_checks"]["mean"], "bloom_negative_v4": a["bloom_negative"]["mean"],
-                "bloom_maybe_v4": a["bloom_maybe"]["mean"], "false_positives_v4": a["false_positives"]["mean"],
-                "fp_without_file_access_v4": a["fp_without_file_access"]["mean"],
-                "skip_rate": a["skip_rate"], "fp_rate_on_absent_checks": a["false_positive_rate_on_absent_checks"],
-                "tables_opened_v3_over_v4": (b["blocks_read"]["mean"] / a["tables_opened"]["mean"]
-                                             if a["tables_opened"]["mean"] else None),
-                "records_v3_over_v4": b["records_decoded"]["mean"] / a["records_decoded"]["mean"]
-                if a["records_decoded"]["mean"] else None}
-        cmp_rows.append(row)
-    out["read_work_comparison"] = cmp_rows
-
-    # ---- per-table cost decomposition (untimed pass) ----
-    dec = []
-    for s in sc:
-        runs_dec = [r["decomposition"] for r in s["runs"] if r["decomposition"]]
-        if not runs_dec:
-            dec.append(None)
-            continue
-        row = {"tables": runs_dec[0]["tables"], "miss_no_share_of_tables": runs_dec[0]["miss_no_share_of_tables"]}
-        if all(d["miss_no"] for d in runs_dec):
-            row["miss_no"] = {"pairs_per_rep": runs_dec[0]["miss_no"]["pairs"], "runs": len(runs_dec),
-                              **{f"{c}_us_median": statistics.median(d["miss_no"][f"{c}_ns_median"]
-                                                                     for d in runs_dec) / 1e3
-                                 for c in ("bloom", "lookup")}}
-        parts = [d["hit"] for d in runs_dec if d.get("hit")]
-        if parts:
-            row["hit"] = {"pairs_per_rep": parts[0]["pairs"], "runs": len(parts),
-                          **{f"{c}_us_median": statistics.median(p[f"{c}_ns_median"] for p in parts) / 1e3
-                             for c in ("bloom", "locate", "open_close", "block_read", "lookup")}}
-        fps = [r["false_positive_cost"] for r in s["runs"] if r.get("false_positive_cost")]
-        if fps:
-            row["false_positive"] = {"pairs_per_rep": fps[0]["pairs"], "runs": len(fps),
-                                     **{f"{c}_us_median": statistics.median(p[f"{c}_ns_median"] for p in fps) / 1e3
-                                        for c in ("bloom", "locate", "open_close", "block_read", "lookup")}}
-        row["hash_us_median"] = statistics.median(d["hash"]["hash_ns_median"] for d in runs_dec) / 1e3
-        row["build_ms_median"] = statistics.median(d["build"]["build_ns_median"] for d in runs_dec) / 1e6
-        row["build_us_per_key_median"] = statistics.median(d["build"]["build_ns_per_key_median"]
-                                                           for d in runs_dec) / 1e3
-        dec.append(row)
-    out["decomposition"] = dec
-
-    # ---- writes ----
-    out["put_load"] = {"v4": [write_row(s) for s in sc], "v3": [write_row(e) for e in s3]}
-    for phase in ("put_overwrite", "delete"):
-        rows = []
-        for s, e in zip(sc, s3):
-            p, q = s["pooled_all_runs"][phase], e["pooled_all_runs"][phase]
-            rows.append({"records": s["records"],
-                         "flushing_ops_total_v4": sum(r["write_split"][phase]["n_flush_triggering_ops"] for r in s["runs"]),
-                         "flushing_ops_total_v3": sum(r["write_split"][phase]["n_flush_triggering_ops"] for r in e["runs"]),
-                         "v4_p50_p95_p99_us": [p["all"][m] for m in ("p50_us", "p95_us", "p99_us")],
-                         "v3_p50_p95_p99_us": [q["all"][m] for m in ("p50_us", "p95_us", "p99_us")],
-                         "v4_over_v3_p50": p["all"]["p50_us"] / q["all"]["p50_us"]})
-        out[phase] = rows
-
-    # ---- recovery ----
-    comp = lambda s, key: statistics.median(r["open_components"][key] for r in s["runs"]) / 1e9  # noqa: E731
-    out["open_recovery"] = {
-        "v4_seconds": [s["open_recovery_seconds_median"] for s in sc],
-        "v3_seconds": [e["open_recovery_seconds_median"] for e in s3],
-        "v4_over_v3": [s["open_recovery_seconds_median"] / e["open_recovery_seconds_median"] for s, e in zip(sc, s3)],
-        "v4_per_run_seconds": [s["open_recovery_seconds"] for s in sc],
-        "v3_per_run_seconds": [e["open_recovery_seconds"] for e in s3],
-        "v4_between_run_spread": [(max(s["open_recovery_seconds"]) - min(s["open_recovery_seconds"]))
-                                  / s["open_recovery_seconds_median"] for s in sc],
-        "v4_final_reopen_seconds_median": [statistics.median(s["open_recovery_final_seconds"]) for s in sc],
-        "v3_final_reopen_seconds_median": [statistics.median(e["open_recovery_final_seconds"]) for e in s3],
-        "v4_components_median_seconds": {k: [comp(s, k) for s in sc] for k in
-                                         ("list_dir_ns", "sstable_open_ns", "wal_replay_ns", "io_reread_ns",
-                                          "filter_crc_ns")},
-        "v3_components_median_seconds": {k: [comp(e, k) for e in s3] for k in
-                                         ("list_dir_ns", "sstable_open_ns", "wal_replay_ns", "index_read_io_ns")},
-        "wal_records_replayed": [s["runs"][0]["records_in_wal_at_open"] for s in sc],
-        "sstables_opened": tables,
-        "index_bytes_read": [s["runs"][0]["open_components"]["index_bytes_read"] for s in sc],
-        "index_entries_loaded": [s["runs"][0]["open_components"]["index_entries_loaded"] for s in sc],
-        "filter_bytes_read": [s["runs"][0]["open_components"]["filter_bytes_read"] for s in sc],
-        "footer_bytes_read": [s["runs"][0]["open_components"]["footer_bytes_read"] for s in sc],
-    }
-
-    # ---- memory ----
-    mem = []
-    for s, e in zip(sc, s3):
-        d4_load = [p["load"]["private_delta"] for p in s["memory_probes"]]
-        d4_open = [p["open"]["private_delta"] for p in s["memory_probes"]]
-        d3_load = [p["load"]["private_delta"] for p in e["memory_probes"]]
-        d3_open = [p["open"]["private_delta"] for p in e["memory_probes"]]
-        retained = [r["table_memory"]["retained_bytes"] for r in s["runs"]]
-        mem.append({"records": s["records"],
-                    "v4_private_delta_after_load_mb": metric_range([x / 1e6 for x in d4_load]),
-                    "v4_private_delta_after_open_mb": metric_range([x / 1e6 for x in d4_open]),
-                    "v3_private_delta_after_load_mb": metric_range([x / 1e6 for x in d3_load]),
-                    "v3_private_delta_after_open_mb": metric_range([x / 1e6 for x in d3_open]),
-                    "v4_over_v3_load_delta": statistics.median(d4_load) / statistics.median(d3_load),
-                    "v4_over_v3_open_delta": statistics.median(d4_open) / statistics.median(d3_open),
-                    "v4_open_minus_v3_open_mb": (statistics.median(d4_open) - statistics.median(d3_open)) / 1e6,
-                    "v4_load_minus_v3_load_mb": (statistics.median(d4_load) - statistics.median(d3_load)) / 1e6,
-                    "v4_peak_working_set_after_load_mb": max(p["load"]["peak_working_set_after"]
-                                                             for p in s["memory_probes"]) / 1e6,
-                    "v3_peak_working_set_after_load_mb": max(p["load"]["peak_working_set_after"]
-                                                             for p in e["memory_probes"]) / 1e6,
-                    "v4_tables_after_load": s["memory_probes"][0]["load"]["tables"],
-                    "v4_filter_bytes_after_load": s["memory_probes"][0]["load"]["filter_bytes"],
-                    "table_heap_retained_bytes": metric_range(retained)})
-    out["memory"] = mem
-
-    # ---- index and filter overhead ----
-    idx = []
-    for s, e in zip(sc, s3):
-        r0 = s["runs"][0]
-        ibytes = sum(b for _, b in r0["index_tables"])
-        fbytes = sum(b for _, b in r0["filter_tables"])
-        ientries = sum(c for c, _ in r0["index_tables"])
-        sst_bytes = sum(b for _, b in r0["tables_final"])
-        records_in_tables = sum(c for c, _ in r0["tables_final"])
-        tm = [r["table_memory"] for r in s["runs"]]
-        retained = statistics.median(m["retained_bytes"] for m in tm)
-        bloom_obj = statistics.median(m["bloom_bytes_objects"] for m in tm)
-        v3_ret = statistics.median(r["index_memory"]["retained_bytes"] for r in e["runs"])
-        idx.append({"records": s["records"], "sstables": len(r0["tables_final"]), "index_entries": ientries,
-                    "index_bytes": ibytes, "filter_bytes": fbytes, "sstable_bytes": sst_bytes,
-                    "filter_share_of_sstable_bytes": fbytes / sst_bytes if sst_bytes else None,
-                    "index_share_of_sstable_bytes": ibytes / sst_bytes if sst_bytes else None,
-                    "records_in_tables": records_in_tables,
-                    "filter_bits_per_record": fbytes * 8 / records_in_tables if fbytes else None,
-                    "filter_bytes_per_record": fbytes / records_in_tables if fbytes else None,
-                    "filter_bytes_per_table": r0["filter_tables"][0][1] if r0["filter_tables"] else None,
-                    "num_hashes": r0["filter_tables"][0][0] if r0["filter_tables"] else None,
-                    "heap_retained_bytes_median": retained, "heap_bloom_objects_bytes_median": bloom_obj,
-                    "heap_retained_minus_bloom_median": retained - bloom_obj,
-                    "v3_index_heap_retained_bytes_median": v3_ret,
-                    "heap_retained_over_v3_index_heap": retained / v3_ret if v3_ret else None,
-                    "bloom_heap_over_bloom_block_bytes": bloom_obj / fbytes if fbytes else None})
-    out["storage"] = idx
-
-    # ---- Bloom validation and false-positive rate ----
-    val, fp = [], []
-    for s in sc:
-        vals = [r["bloom_validation"] for r in s["runs"]]
-        val.append({"records": s["records"], "runs_validated": len(vals),
-                    "keys_checked_per_run": vals[0]["keys_checked"],
-                    "tombstone_keys_checked_per_run": vals[0]["tombstone_keys_checked"],
-                    "tables_per_run": vals[0]["tables"],
-                    "false_negatives": sum(v["false_negatives"] for v in vals),
-                    "all_stored_filters_equal_rebuilt": all(v["stored_filters_equal_rebuilt"] for v in vals)})
-        probes = [r["fpr_probe"] for r in s["runs"] if r.get("fpr_probe")]
-        fp.append({"records": s["records"], **{k: probes[0][k] for k in (
-            "tables", "keys_per_table", "checks", "false_positives", "measured_fpr", "wilson95", "expected_fpr",
-            "per_table_fpr_min_median_max")}} if probes else None)
-    out["bloom_validation"] = val
-    out["false_positive_rate"] = fp
+# ---- memory probes (fresh processes) -------------------------------------------------------------------------------
+def memory_probe(mode, args):
+    """Run inside a fresh process. 'load': build a database of `records` keys; 'open': recover it; 'warm': recover it,
+    then run the standard GET workload (hits, then misses) with the cache at `cache_bytes` (0 = disabled)."""
+    gc.collect()
+    before = process_memory()
+    cache_bytes = args.probe_cache_bytes if args.probe_cache_bytes is not None else DEFAULT_BLOCK_CACHE_BYTES
+    db = KVStore(args.probe_path, sync=False, memtable_limit_bytes=args.probe_limit, block_cache_bytes=cache_bytes)
+    if mode == "load":
+        rng = random.Random(SEED)
+        for i in range(args.probe_records):
+            db.put(key_of(i), rng.randbytes(VALUE_SIZE))
+    gc.collect()
+    after = process_memory()
+    out = {"mode": mode, "records": args.probe_records, "before": before, "after": after, "tables": len(db._sstables),
+           "index_entries": sum(len(t._keys) for t in db._sstables),
+           "filter_bytes": sum(t.filter_len for t in db._sstables), "memtable_entries": len(db._memtable),
+           "persistent": dir_state(args.probe_path)}
+    if mode == "warm":
+        _, hit_idx, _, miss_keys, _ = workload(args.probe_records, args.probe_hits, args.probe_misses,
+                                               args.probe_v0_gets)
+        for i in hit_idx:
+            db.get(key_of(i))
+        for k in miss_keys:
+            db.get(k)
+        gc.collect()
+        out["after_gets"] = process_memory()
+        out["cache"] = cache_counters(db.block_cache)
+    db.close()
     return out
 
 
-def baseline_analysis(result):
-    v3 = v3_reference()
-    out = {}
-    for tag in ("default_limit", "small_limit"):
-        entry = result.get("baseline", {}).get(tag)
-        if not entry:
-            continue
-        ref = v3["baseline"][tag]["aggregate_over_runs"]
-        rows = {}
-        for name, m in entry["aggregate_over_runs"].items():
-            if name in ref:
-                rows[name] = {p: {"v4_median": m[p]["median"], "v3_median": ref[name][p]["median"],
-                                  "v4_over_v3": m[p]["median"] / ref[name][p]["median"]}
-                              for p in ("p50_us", "p95_us", "p99_us")}
-        out[tag] = rows
-    return out
+def run_memory_probe(records, limit, n_hits, n_misses, v0_gets):
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "db")
+        out = {}
+        for key, mode, cache_bytes in (("load", "load", None), ("open", "open", None),
+                                       ("warm_cache", "warm", DEFAULT_BLOCK_CACHE_BYTES), ("warm_nocache", "warm", 0)):
+            cmd = [sys.executable, str(Path(__file__).resolve()), "--probe", mode, "--probe-records", str(records),
+                   "--probe-path", path, "--probe-limit", str(limit), "--probe-hits", str(n_hits),
+                   "--probe-misses", str(n_misses), "--probe-v0-gets", str(v0_gets)]
+            if cache_bytes is not None:
+                cmd += ["--probe-cache-bytes", str(cache_bytes)]
+            proc = subprocess.run(cmd, capture_output=True, text=True, check=True)
+            out[key] = json.loads(proc.stdout.strip().splitlines()[-1])
+    res = {}
+    for key, p in out.items():
+        res[key] = {"private_delta": p["after"]["private"] - p["before"]["private"],
+                    "working_set_delta": p["after"]["working_set"] - p["before"]["working_set"],
+                    "peak_working_set_after": p["after"]["peak_working_set"], "tables": p["tables"],
+                    "filter_bytes": p["filter_bytes"], "memtable_entries": p["memtable_entries"],
+                    "persistent": p["persistent"]}
+        if key.startswith("warm"):
+            res[key]["private_growth_during_gets"] = p["after_gets"]["private"] - p["after"]["private"]
+            res[key]["working_set_growth_during_gets"] = p["after_gets"]["working_set"] - p["after"]["working_set"]
+            res[key]["cache"] = p["cache"]
+    return res
 
 
-# ---- metadata / orchestration ------------------------------------------------------------------
+# ---- 10,000-key head-to-head (baseline_entry, unchanged, with V5 substituted) --------------------------
+def v5_baseline_entry(wl_args, runs, limit):
+    global KVStore, timed_get
+    created = []
+
+    class Recording(KVStore):
+        def __init__(self, *a, **k):
+            super().__init__(*a, **k)
+            created.append(self)
+
+    saved = (KVStore, timed_get)  # baseline_entry builds `KVStore(...)`, so it is swapped for the recording subclass
+    capture = Capture()
+    KVStore, timed_get = Recording, make_timed_call(capture)
+    try:
+        entry = baseline_entry(wl_args, runs, limit)
+    finally:
+        KVStore, timed_get = saved
+    # Instances are created in order: per run, the main store, its reopen, and the sync=True store (which GETs nothing).
+    per_run = [[cache_counters(db.block_cache) for db in created[i * 3:(i + 1) * 3]] for i in range(runs)]
+    entry["block_cache_bytes"] = DEFAULT_BLOCK_CACHE_BYTES
+    entry["cache_counters_per_run"] = [{"main_store": p[0], "after_reopen": p[1], "sync_store": p[2]} for p in per_run]
+    entry["get_outcomes"] = {"cache_hit": capture.outcome.count(OUT_HIT), "cache_miss": capture.outcome.count(OUT_MISS),
+                             "no_cache_access": capture.outcome.count(OUT_NONE)}
+    return entry
+
+
+# ---- controlled locality workload ----------------------------------------------------------------------------------
+def locality_geometry(records, limit):
+    e = -(-limit // ENTRY_PAYLOAD)  # records per flushed table
+    f = (records - 1) // e          # flushed tables
+    bpt = -(-e // BLOCK_RECORDS)    # blocks per table
+    return {"entries_per_table": e, "tables": f, "blocks_per_table": bpt, "blocks": f * bpt,
+            "flushed_records": f * e}
+
+
+def locality_plan(records, limit, ops, hot_blocks, hot_fraction, seed):
+    """The deterministic GET sequence. Hot set: `hot_blocks` distinct blocks drawn without replacement from every block
+    of every flushed table. Cold set: one block per cold GET, drawn without replacement from the remaining blocks
+    (each cold block is read once). A GET of block (t, b) asks for a uniformly random key inside that block."""
+    g = locality_geometry(records, limit)
+    e, bpt = g["entries_per_table"], g["blocks_per_table"]
+    n_hot = round(ops * hot_fraction)
+    n_cold = ops - n_hot
+    assert hot_blocks + n_cold <= g["blocks"], "not enough flushed blocks for the hot and cold sets"
+    rng = random.Random(seed)
+    chosen = rng.sample(range(g["blocks"]), hot_blocks + n_cold)
+    hot, cold = chosen[:hot_blocks], chosen[hot_blocks:]
+
+    def key_in(block_id):
+        t, b = divmod(block_id, bpt)
+        return t * e + b * BLOCK_RECORDS + rng.randrange(min(BLOCK_RECORDS, e - b * BLOCK_RECORDS))
+
+    seq = [(key_in(hot[rng.randrange(hot_blocks)]), 0) for _ in range(n_hot)]
+    seq += [(key_in(b), 1) for b in cold]
+    rng.shuffle(seq)
+    idx = [i for i, _ in seq]
+    kind = array("b", (k for _, k in seq))
+    block_of = [(i // e) * bpt + (i % e) // BLOCK_RECORDS for i in idx]
+    seen, first = set(), array("b")
+    for b, k in zip(block_of, kind):
+        first.append(1 if (k == 0 and b not in seen) else 0)
+        seen.add(b)
+    return {"geometry": g, "idx": idx, "kind": kind, "block_of": block_of, "first_hot": first,
+            "hot_blocks": hot, "n_hot_ops": n_hot, "n_cold_ops": n_cold}
+
+
+def plan_summary(plan, ops):
+    g = plan["geometry"]
+    hot_set = set(plan["hot_blocks"])
+    return {**g, "ops": ops, "hot_blocks": len(plan["hot_blocks"]), "hot_ops": plan["n_hot_ops"],
+            "cold_ops": plan["n_cold_ops"], "cold_distinct_blocks": len({b for b, k in zip(plan["block_of"], plan["kind"])
+                                                                          if k == 1}),
+            "hot_distinct_blocks_touched": len({b for b, k in zip(plan["block_of"], plan["kind"]) if k == 0}),
+            "first_hot_accesses": sum(plan["first_hot"]), "repeat_hot_accesses": plan["n_hot_ops"] - sum(plan["first_hot"]),
+            "hot_and_cold_blocks_overlap": len(hot_set & {b for b, k in zip(plan["block_of"], plan["kind"]) if k == 1}),
+            "all_keys_flushed": max(plan["idx"]) < g["flushed_records"],
+            "block_bytes_full": BLOCK_RECORDS * RECORD_BYTES,
+            "hot_set_bytes": sum(min(BLOCK_RECORDS, g["entries_per_table"] - (b % g["blocks_per_table"]) * BLOCK_RECORDS)
+                                 for b in plan["hot_blocks"]) * RECORD_BYTES}
+
+
+def open_store(path, limit, capacity):
+    return KVStore(path, sync=False, memtable_limit_bytes=limit, block_cache_bytes=capacity)
+
+
+def locality_config(path, limit, name, capacity, plan, expected, memory_pass):
+    """One configuration on one database: a timed pass, then an untimed instrumented pass on a fresh instance."""
+    keys = [key_of(i) for i in plan["idx"]]
+    want = [expected[i] for i in plan["idx"]]
+    n = len(keys)
+    g = plan["geometry"]
+    out = {"capacity_bytes": capacity}
+
+    # -- timed pass: a new store instance = an empty cache; the first access of every block is included --
+    db = open_store(path, limit, capacity)
+    assert len(db._sstables) == g["tables"] and all(k not in db._memtable for k in keys), "a GET target is not flushed"
+    cache = cache_of(db)
+    ns, outcome = array("q", bytes(8 * n)), array("b", bytes(n))
+    perf, get = time.perf_counter_ns, db.get
+    for j in range(n):
+        h0, m0 = cache.hits, cache.misses
+        t0 = perf()
+        got = get(keys[j])
+        ns[j] = perf() - t0
+        outcome[j] = OUT_MISS if cache.misses > m0 else OUT_HIT if cache.hits > h0 else OUT_NONE
+        assert got == want[j], f"GET returned a wrong value for index {plan['idx'][j]}"
+    timed_stats = cache_counters(cache) if capacity is not None else None
+    db.close()
+    del db
+
+    # -- untimed instrumented pass on a fresh instance (fresh cache), same keys in the same order --
+    db = open_store(path, limit, capacity)
+    cache = cache_of(db)
+    reads_per_op = array("b")
+    hits_with_read = hit_ops = miss_ops = other_ops = 0
+    seq_equal = True
+    per_op = {"tables_consulted": array("h"), "blocks_scanned": array("h")}
+    with Counting() as counting:
+        c = counting.c
+        for j in range(n):
+            h0, m0, r0, o0 = cache.hits, cache.misses, c["block_reads"], c["open_table_calls"]
+            t0, b0 = c["tables_consulted"], c["blocks_scanned"]
+            got = db.get(keys[j])
+            assert got == want[j]
+            per_op["tables_consulted"].append(c["tables_consulted"] - t0)
+            per_op["blocks_scanned"].append(c["blocks_scanned"] - b0)
+            dr, do = c["block_reads"] - r0, c["open_table_calls"] - o0
+            reads_per_op.append(dr)
+            assert dr == do, "a file was opened for something other than a block read"
+            o = OUT_MISS if cache.misses > m0 else OUT_HIT if cache.hits > h0 else OUT_NONE
+            seq_equal &= o == outcome[j]
+            if o == OUT_HIT:
+                hit_ops += 1
+                hits_with_read += dr != 0
+            elif o == OUT_MISS:
+                miss_ops += 1
+                other_ops += dr != 1
+            else:
+                other_ops += dr != 1  # V4 (no cache): every GET is one block read
+        totals = dict(c)
+    inst_stats = cache_counters(cache) if capacity is not None else None
+    db.close()
+    del db
+    assert seq_equal, "the instrumented pass saw different cache outcomes than the timed pass"
+    assert inst_stats == timed_stats, "cache counters differ between the timed and the instrumented pass"
+    assert set(per_op["blocks_scanned"]) == {1}, "a GET did not scan exactly one block"
+    assert min(per_op["tables_consulted"]) >= 1, "a GET was answered without consulting an SSTable"
+    assert totals["block_reads"] == totals["open_table_calls"]
+    assert other_ops == 0, "a GET that read from disk did not read exactly one block"
+    if capacity is not None:
+        assert totals["blocks_scanned"] == inst_stats["hits"] + inst_stats["misses"]
+        assert totals["block_reads"] == inst_stats["misses"], "physical block reads != cache misses"
+        assert hits_with_read == 0, "a cache hit performed a physical block read"
+    out.update({"timed_cache": timed_stats, "work": totals, "outcome_ops": {"hit": hit_ops, "miss": miss_ops},
+                "hit_ops_with_block_read": hits_with_read, "non_one_read_ops": other_ops,
+                "tables_consulted_per_get": {"min": min(per_op["tables_consulted"]),
+                                             "max": max(per_op["tables_consulted"]),
+                                             "mean": statistics.fmean(per_op["tables_consulted"])},
+                "outcome_sequence_equal_timed_vs_instrumented": seq_equal})
+
+    # -- retained-memory pass (first run only): Python heap held by the cache after the whole sequence --
+    if memory_pass and capacity is not None:
+        gc.collect()
+        db = open_store(path, limit, capacity)
+        gc.collect()
+        tracemalloc.start()
+        base = tracemalloc.get_traced_memory()[0]
+        for k in keys:
+            db.get(k)
+        gc.collect()
+        current = tracemalloc.get_traced_memory()[0]
+        tracemalloc.stop()
+        stats = cache_counters(db.block_cache)
+        out["heap_retained"] = {"traced_bytes_retained": current - base, "cache_payload_bytes": stats["bytes"],
+                                "entries": stats["entries"],
+                                "overhead_bytes": current - base - stats["bytes"],
+                                "overhead_per_entry": (current - base - stats["bytes"]) / stats["entries"]
+                                if stats["entries"] else None}
+        db.close()
+    return out, ns, outcome
+
+
+def locality_run(plan, limit, order, records, memory_pass):
+    check_headroom()
+    wanted = set(plan["idx"])
+    expected = {}
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "db")
+        value_rng = random.Random(SEED)
+        db = KVStore(path, sync=False, memtable_limit_bytes=limit)
+        for i in range(records):
+            v = value_rng.randbytes(VALUE_SIZE)
+            if i in wanted:
+                expected[i] = v
+            db.put(key_of(i), v)
+        db.close()
+        del db
+        state = dir_state(path)
+        g = plan["geometry"]
+        assert state["sst_files"] == g["tables"]
+        results, raw = {}, {}
+        for name, capacity in order:
+            res, ns, outcome = locality_config(path, limit, name, capacity, plan, expected, memory_pass)
+            results[name], raw[name] = res, (ns, outcome)
+            print(f"    {name:<10} p50={sorted(ns)[len(ns) // 2] / 1e3:7.1f}us  "
+                  f"hits={res['outcome_ops']['hit']:>7,}  reads={res['work']['block_reads']:>7,}", flush=True)
+    assert not os.path.exists(d)
+    return {"configs": results, "state": state, "_raw": raw}
+
+
+GROUPS = ("all", "hot_first", "hot_repeat", "cold", "cache_hit", "cache_miss", "hot_repeat_cache_hit",
+          "hot_repeat_cache_miss")
+
+
+def group_indices(plan, outcome):
+    kind, first = plan["kind"], plan["first_hot"]
+    g = {name: [] for name in GROUPS}
+    for j in range(len(kind)):
+        o = outcome[j]
+        g["all"].append(j)
+        if kind[j] == 1:
+            g["cold"].append(j)
+        elif first[j]:
+            g["hot_first"].append(j)
+        else:
+            g["hot_repeat"].append(j)
+            if o == OUT_HIT:
+                g["hot_repeat_cache_hit"].append(j)
+            elif o == OUT_MISS:
+                g["hot_repeat_cache_miss"].append(j)
+        if o == OUT_HIT:
+            g["cache_hit"].append(j)
+        elif o == OUT_MISS:
+            g["cache_miss"].append(j)
+    return g
+
+
+def locality_entry(params, limit, n_runs):
+    plan = locality_plan(params["records"], limit, params["ops"], params["hot_blocks"], params["hot_fraction"],
+                         params["seed"])
+    summary = plan_summary(plan, params["ops"])
+    assert summary["all_keys_flushed"] and summary["hot_and_cold_blocks_overlap"] == 0
+    assert summary["hot_distinct_blocks_touched"] == params["hot_blocks"]
+    print(f"locality plan: {json.dumps(summary)}", flush=True)
+    runs = []
+    pooled = {name: {gn: array("q") for gn in GROUPS} for name, _ in CONFIGS}
+    for i in range(n_runs):
+        shift = i % len(CONFIGS)  # rotate the configuration order between runs
+        order = CONFIGS[shift:] + CONFIGS[:shift]
+        print(f"locality run {i + 1}/{n_runs} order={[n for n, _ in order]}", flush=True)
+        t0 = time.perf_counter()
+        r = locality_run(plan, limit, order, params["records"], i == 0)
+        groups_per_run = {name: group_indices(plan, outcome) for name, (ns, outcome) in r["_raw"].items()}
+        for name, (ns, _) in r["_raw"].items():
+            for gn, ix in groups_per_run[name].items():
+                pooled[name][gn].extend(ns[j] for j in ix)
+        runs.append({"order": [n for n, _ in order], "state": r["state"], "configs": r["configs"],
+                     "summary_all": {name: full_summary(ns) for name, (ns, _) in r["_raw"].items()},
+                     "summary_by_group": {name: {gn: full_summary([ns[j] for j in ix]) if ix else None
+                                                 for gn, ix in groups_per_run[name].items()}
+                                          for name, (ns, _) in r["_raw"].items()}})
+        del r
+        print(f"  run done in {time.perf_counter() - t0:.0f}s", flush=True)
+    pooled_summary = {name: {gn: ({"ops": len(a), **full_summary(a)} if len(a) else None)
+                             for gn, a in groups.items()} for name, groups in pooled.items()}
+    return {"params": params, "memtable_limit_bytes": limit, "plan": summary, "configs": [[n, c] for n, c in CONFIGS],
+            "runs_completed": n_runs, "runs_planned": n_runs, "runs": runs, "pooled": pooled_summary}
+
+
+# ---- metadata / orchestration ---------------------------------------------------------------------------------------
 def metadata(args):
     ram = ram_bytes()
-    overrides = {k: getattr(args, k) for k in ("memtable_limit_bytes", "hits", "misses", "runs")
+    overrides = {k: getattr(args, k) for k in ("memtable_limit_bytes", "hits", "misses", "runs", "locality_records",
+                                               "locality_ops", "locality_hot_blocks", "locality_runs")
                  if getattr(args, k) is not None}
     return {
-        "benchmark": "v4",
+        "benchmark": "v5",
         "command": " ".join([Path(sys.executable).name] + sys.argv),
         "overrides": overrides or None,
         "python": sys.version.replace("\n", " "),
@@ -1430,42 +1699,29 @@ def metadata(args):
             "key_size_bytes": len(key_of(0)),
             "value_size_bytes": VALUE_SIZE,
             "record_bytes": RECORD_BYTES,
-            "delete_record_bytes": DELETE_RECORD_BYTES,
-            "sstable_footer_bytes_v4": FOOTER_V4_SIZE,
-            "index_entry_bytes": INDEX_ENTRY_BYTES,
-            "index_interval": DEFAULT_INDEX_INTERVAL,
+            "index_interval": 16,
             "bloom_bits_per_key": BITS_PER_KEY,
             "bloom_num_hashes": NUM_HASHES,
-            "bloom_expected_fpr_formula": bloom.expected_false_positive_rate(1000, bloom.filter_bytes(1000, 10),
-                                                                              NUM_HASHES),
+            "block_cache_bytes_default": DEFAULT_BLOCK_CACHE_BYTES,
             "store_sync": False,
             "memtable_limit_bytes": args.memtable_limit_bytes or DEFAULT_MEMTABLE_LIMIT_BYTES,
             "default_memtable_limit_bytes": DEFAULT_MEMTABLE_LIMIT_BYTES,
             "runs_per_scale": {str(r): c["runs"] for r, c in V0_SCALES.items()},
             "gets_hit_per_run": {str(r): c for r, c in GET_HITS.items()},
             "gets_miss_per_run": {str(r): c for r, c in GET_MISSES.items()},
-            "instrumented_gets_per_run": {"hit": STRUCT_HITS, "miss": STRUCT_MISSES_V4},
-            "decomposition": {"miss_reps": DECOMP_REPS_MISS, "hit_reps": DECOMP_REPS_HIT,
-                              "hit_pairs": DECOMP_HIT_PAIRS, "fp_pairs": FP_PAIRS, "hash_reps": HASH_REPS,
-                              "build_reps": BUILD_REPS},
-            "fpr_probe": {"min_keys_per_table": FPR_MIN_KEYS, "min_checks": FPR_MIN_CHECKS,
-                          "probe_key_format": "zzz%08d", "probed_in_first_run_of_each_scale": True},
-            "n_overwrites": N_OVERWRITES,
-            "n_deletes": N_DELETES,
+            "instrumented_sample_gets_per_run": {"hit": STRUCT_HITS, "miss": STRUCT_MISSES_V4},
             "memory_probes_per_scale": MEMORY_PROBES,
             "baseline_runs": BASELINE_RUNS,
             "baseline_small_limit_bytes": SMALL_LIMIT_BYTES,
+            "locality": {**LOCALITY, "configs": [[n, c] for n, c in CONFIGS]},
         },
-        "timing_notes": "Only store calls are timed. Percentiles are nearest-rank (same code as V0..V3). Flush "
-        "boundaries are observed by wrapping the store instance's flush and lsm_store.sstable.write_sstable; no "
-        "production code is changed. A flush-triggering operation is a put/delete that finds memtable bytes >= the "
-        "limit and flushes before applying itself; its latency includes the whole flush (here including building the "
-        "Bloom filter). Raw per-operation latencies are not stored except for flush-triggering operations; "
-        "percentiles of all, non-flush and flush-triggering writes are computed in-process. open_recovery is the "
-        "first KVStore(path) after close() in the same process; open_components repeats the open steps with the "
-        "module's own functions. Read-work counting, the per-table cost decomposition, the Bloom validation scan, the "
-        "false-positive probe and the table-memory (tracemalloc) pass are untimed; read-work counting runs between "
-        "the timed GETs and the timed overwrites (as in V2/V3) and the others after every timed phase of the run.",
+        "timing_notes": "Only store calls are timed (one perf_counter_ns pair per operation); percentiles are "
+        "nearest-rank (same code as V0..V4). The standard workload is v4_run / baseline_run run "
+        "unchanged with KVStore substituted; the per-GET cache outcome (cache hit counter before and after the "
+        "call) and the result checksum are recorded outside the timed interval. The replays, counters on "
+        "SSTable._read_block and sstable._open_table, the V4-style structural sample, the retained-heap pass and the "
+        "memory probes are untimed and run after (or between) the timed phases. open_recovery is the first "
+        "KVStore(path) after close() in the same process, with an empty cache.",
     }
 
 
@@ -1478,42 +1734,65 @@ def checkpoint(result, out_path):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(RESULTS / "v4_benchmark.json"))
+    ap.add_argument("--out", default=str(RESULTS / "v5_benchmark.json"))
     ap.add_argument("--scales", default=None, help="comma-separated record counts from the V0 scale ladder")
     ap.add_argument("--baseline", action="store_true", help="10,000-key head-to-head workloads")
+    ap.add_argument("--locality", action="store_true", help="controlled cache-locality workload")
     ap.add_argument("--analyze-only", action="store_true")
-    ap.add_argument("--probe", choices=["load", "open"])
+    ap.add_argument("--probe", choices=["load", "open", "warm"])
     ap.add_argument("--probe-records", type=int)
     ap.add_argument("--probe-path")
     ap.add_argument("--probe-limit", type=int)
+    ap.add_argument("--probe-hits", type=int)
+    ap.add_argument("--probe-misses", type=int)
+    ap.add_argument("--probe-v0-gets", type=int)
+    ap.add_argument("--probe-cache-bytes", type=int, default=None)
     # Sanity/test overrides; recorded in the metadata and The final protocol uses none.
     ap.add_argument("--memtable-limit-bytes", type=int, default=None)
     ap.add_argument("--hits", type=int, default=None)
     ap.add_argument("--misses", type=int, default=None)
     ap.add_argument("--runs", type=int, default=None)
+    ap.add_argument("--locality-records", type=int, default=None)
+    ap.add_argument("--locality-ops", type=int, default=None)
+    ap.add_argument("--locality-hot-blocks", type=int, default=None)
+    ap.add_argument("--locality-runs", type=int, default=None)
     args = ap.parse_args()
     out_path = Path(args.out)
     limit = args.memtable_limit_bytes or DEFAULT_MEMTABLE_LIMIT_BYTES
 
     if args.probe:
-        print(json.dumps(memory_probe(args.probe, args.probe_records, args.probe_path, args.probe_limit)))
+        print(json.dumps(memory_probe(args.probe, args)))
         return
 
     if args.analyze_only:
+        from analyze import analyze, baseline_analysis, locality_analysis
+
         result = json.loads(out_path.read_text())
         result["analysis"] = analyze(result)
         result["baseline_analysis"] = baseline_analysis(result)
+        result["locality_analysis"] = locality_analysis(result) if result.get("locality") else None
         checkpoint(result, out_path)
         print(json.dumps({"analysis_keys": list(result["analysis"]), "scales": list(result["scales"])}))
         return
-
-    result = {"metadata": metadata(args), "status": "in_progress", "scales": {}, "baseline": {}}
+    result = {"metadata": metadata(args), "status": "in_progress", "scales": {}, "baseline": {}, "locality": None}
 
     if args.baseline:
         n_runs = args.runs or BASELINE_RUNS
-        result["baseline"]["default_limit"] = baseline_entry((10_000, 200, 300, 300), n_runs, limit)
+        result["baseline"]["default_limit"] = v5_baseline_entry((10_000, 200, 300, 300), n_runs, limit)
         checkpoint(result, out_path)
-        result["baseline"]["small_limit"] = baseline_entry((10_000, 200, 300, 300), n_runs, SMALL_LIMIT_BYTES)
+        result["baseline"]["small_limit"] = v5_baseline_entry((10_000, 200, 300, 300), n_runs, SMALL_LIMIT_BYTES)
+        result["status"] = "complete"
+        checkpoint(result, out_path)
+        print("wrote", out_path)
+        return
+
+    if args.locality:
+        params = dict(LOCALITY)
+        for key, arg in (("records", args.locality_records), ("ops", args.locality_ops),
+                         ("hot_blocks", args.locality_hot_blocks), ("runs", args.locality_runs)):
+            if arg is not None:
+                params[key] = arg
+        result["locality"] = locality_entry(params, limit, params["runs"])
         result["status"] = "complete"
         checkpoint(result, out_path)
         print("wrote", out_path)
@@ -1524,29 +1803,9 @@ def main():
         n_hits = args.hits or GET_HITS[records]
         n_misses = args.misses or GET_MISSES[records]
         n_runs = args.runs or V0_SCALES[records]["runs"]
-        runs = []
-        for i in range(n_runs):
-            print(f"scale {records:>10,} V4 run {i + 1}/{n_runs} ...", flush=True)
-            t0 = time.perf_counter()
-            runs.append(v4_run(records, limit, n_hits, n_misses, V0_SCALES[records]["gets_per_kind"], i == 0))
-            r = runs[-1]
-            s = r["summary"]
-            print(f"  done in {time.perf_counter() - t0:.0f}s  flushes={len(r['flushes']['put_load'])}  "
-                  f"open={r['open_recovery_ns'] / 1e9:.3f}s  hit p50={s['get_hit']['p50_us']:.1f}us  "
-                  f"miss p50={s['get_miss']['p50_us']:.1f}us  put max={r['put_load_max_ns'] / 1e6:.1f}ms", flush=True)
-        memory = []
-        for i in range(MEMORY_PROBES):
-            print(f"scale {records:>10,} memory probe {i + 1}/{MEMORY_PROBES} ...", flush=True)
-            memory.append(run_memory_probe(records, limit))
-        entry = scale_entry(records, limit, n_hits, n_misses, runs, memory)
-        entry["runs_planned"] = n_runs
-        entry["index_interval"] = 16
-        entry["bloom_bits_per_key"] = BITS_PER_KEY
-        result["scales"][str(records)] = entry
-        del runs
+        result["scales"][str(records)] = v5_standard_entry(records, limit, n_hits, n_misses, n_runs)
         checkpoint(result, out_path)
     result["status"] = "complete"
-    result["analysis"] = analyze(result)
     checkpoint(result, out_path)
     print("wrote", out_path)
 
