@@ -40,7 +40,7 @@ class BlockCache:
         if len(data) > self.capacity_bytes:
             return False
         key = (table, block)
-        old = self._entries.get(key)
+        old = self._entries.pop(key, None)
         if old is not None:
             self.bytes -= len(old)
         while self.bytes + len(data) > self.capacity_bytes:
@@ -53,7 +53,7 @@ class BlockCache:
         return True
 
     def discard(self, table, block):
-        old = self._entries.get((table, block))
+        old = self._entries.pop((table, block), None)
         if old is not None:
             self.bytes -= len(old)
 
