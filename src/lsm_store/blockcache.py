@@ -57,6 +57,15 @@ class BlockCache:
         if old is not None:
             self.bytes -= len(old)
 
+    def discard_table(self, table):
+        victims = []
+        for key in self._entries:
+            if key[0] == table:
+                victims.append(key)
+        for key in victims:
+            self.bytes -= len(self._entries.pop(key))
+        return len(victims)
+
     def __len__(self):
         return len(self._entries)
 

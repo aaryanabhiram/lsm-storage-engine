@@ -1,6 +1,6 @@
 # V5 design: block cache
 
-V4 decides which tables to search (Bloom filters) and which block of a table to read (sparse index). It still goes to the file for every block it needs, even a block it read a moment ago. V5 keeps recently read blocks in memory. Nothing else changes: the WAL, memtable, synchronous flush, recovery, SSTable formats, Bloom filters and sparse index are V4's ([v4-design.md](v4-design.md)).
+V4 decides which tables to search (Bloom filters) and which block of a table to read (sparse index). It still goes to the file for every block it needs, even a block it read a moment ago. V5 keeps recently read blocks in memory. Everything else is V4's: the WAL, memtable, synchronous flush, recovery, SSTable formats, Bloom filters and sparse index ([v4-design.md](v4-design.md)).
 
 V5 adds a block cache to `KVStore` in `store.py` (V4 plus the cache). `blockcache.py` holds the cache, and `sstable.py` reads blocks through it. There's **no on-disk change**: the cache is purely in memory, and V2, V3 and V4 tables are read exactly as before.
 
@@ -66,7 +66,7 @@ Result semantics (value, empty value, tombstone, `NOT_FOUND`), newest-table prec
 
 ## Limitations
 
-- Hits still pay record decoding and checksum verification; only the file open and read are avoided. How much that matters is a measurement question, not assumed.
+- Hits still pay record decoding and checksum verification; only the file open and read are avoided. How much that matters is measured in [benchmarks.md](benchmarks.md#v5-benchmark).
 - Only block bytes are counted against the capacity.
 - The cache helps only when blocks are revisited. A workload that touches each block once gains nothing and pays for the insertions.
 - Hits and misses for the memtable aren't cache events, since a key found in the memtable never reaches it.

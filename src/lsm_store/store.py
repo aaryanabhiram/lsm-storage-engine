@@ -1,5 +1,7 @@
+import heapq
 import os
 import re
+import time
 
 from . import bloom, sstable
 from .blockcache import DEFAULT_BLOCK_CACHE_BYTES, BlockCache
@@ -13,7 +15,11 @@ DEFAULT_INDEX_INTERVAL = 16  # records per index block
 DEFAULT_BLOOM_BITS_PER_KEY = bloom.DEFAULT_BITS_PER_KEY  # 10 bits/key, 7 hashes, ~0.8% false positives
 
 _WAL_RE = re.compile(r"^wal-(\d{8})\.log$")
-_SST_RE = re.compile(r"^sst-(\d{8})\.sst$")
+_TABLE_RE = re.compile(r"^(sst|cmp)-(\d{8})\.sst$")
+
+_STAT_KEYS = ("compactions", "input_tables", "output_tables", "records_read", "records_emitted",
+              "obsolete_records_removed", "tombstones_removed", "bytes_read", "bytes_written",
+              "input_table_bytes", "output_table_bytes", "duration_s")
 
 
 def _entry_size(key, value):
@@ -22,8 +28,35 @@ def _entry_size(key, value):
     return len(key) + len(value)
 
 
+def _ranked(table, rank):
+    # A function, not an inline generator expression: ``rank`` must be bound per stream, not late-bound.
+    for key, value in table.items():
+        yield key, rank, value
+
+
+def merge_newest(tables):
+    streams = []
+    for rank, table in enumerate(reversed(tables)):
+        streams.append(_ranked(table, rank))
+    last = None
+    for key, _rank, value in heapq.merge(*streams):
+        if key == last:
+            continue  # an older version of a key already emitted
+        last = key
+        yield key, value
+
+
+def _live_entries(tables):
+    for key, value in merge_newest(tables):
+        if value is not None:
+            yield key, value
+
+
 class KVStore:
-    # TODO: _sstables only grows and get() walks every table newest to oldest, reads degrade as tables pile up
+    # simple sequential merge for compaction, too lazy to write leveled logic right now. compact() is manual and
+    # always rewrites ALL live data into one table
+    # TODO: compact() blocks the caller and needs free disk for a full copy of the live data (old tables stay until the new one is in)
+    # TODO: two passes over the inputs (count survivors, then write them) so every input table gets read twice
     # TODO memtable limit is key+value bytes only, dict overhead isn't counted so real mem use is a few x the limit
     # TODO: index_interval is fixed at 16, never tuned. bigger interval = smaller index, more records scanned per lookup
     # TODO: filters only help for keys missing from a table, a present key still needs a block read. no range scan at all
@@ -42,21 +75,22 @@ class KVStore:
         self._block_cache = BlockCache(block_cache_bytes)  # before opening the tables: they share it
         self._index_interval = index_interval
         self._bloom_bits_per_key = bloom_bits_per_key
+        self._totals = {}
+        for key in _STAT_KEYS:
+            self._totals[key] = 0
         self._dir = path
         self._sync = sync
         self._limit = memtable_limit_bytes
         os.makedirs(path, exist_ok=True)
 
-        # leftover .tmp from a flush that died, safe to delete
-        for name in os.listdir(path):
-            if name.endswith(".tmp") and _SST_RE.match(name[:-4]):
-                os.remove(os.path.join(path, name))
-
-        sst_ids = self._ids(_SST_RE)
+        tables = self._discover_tables()  # also removes unfinished builds and tables a compaction replaced
+        sst_ids = []
+        for table_id, _ in tables:
+            sst_ids.append(table_id)
         wal_ids = self._ids(_WAL_RE)
         self._sstables = []  # oldest -> newest
-        for i in sst_ids:
-            self._sstables.append(SSTable(self._sst_path(i), cache=self._block_cache))
+        for _, table_path in tables:
+            self._sstables.append(SSTable(table_path, cache=self._block_cache))
         self._memtable = self._replay_segments(wal_ids)
         self._mem_bytes = 0
         for k, v in self._memtable.items():
@@ -78,8 +112,6 @@ class KVStore:
     def put(self, key, value):
         self._check_bytes(key, value)
         self._check_open()
-
-
         # flush runs inline when the memtable is full, so this put() eats the whole sstable write + fsync. bg thread someday
         self._flush_if_full()  # flush first so a failed flush can't leave a half applied put
         self._wal.append(OP_PUT, key, value)  # may raise: memtable untouched
@@ -121,6 +153,8 @@ class KVStore:
         self._wal_id = new_id
         self._memtable = {}
         self._mem_bytes = 0
+
+
         # 3. old wal segs are redundant now, delete oldest first
         old_wal.close()
         self._delete_segments_before(new_id)
@@ -134,6 +168,67 @@ class KVStore:
 
     def cache_stats(self):
         return self._block_cache.stats()
+
+    def compact(self):
+        self._check_open()
+        tables = list(self._sstables)
+        if not tables or (len(tables) == 1 and self._is_compacted(tables[0])):
+            return self._record({})  # nothing to do; a lone compaction output has no obsolete data
+        started = time.perf_counter()
+        input_bytes = 0
+        input_records = 0
+        scanned = 0  # bytes of record regions that one full pass reads
+        for table in tables:
+            input_bytes += os.path.getsize(table.path)
+            input_records += table.count
+            scanned += table.data_len
+
+        # pass 1: validate everything, resolve versions, count survivors
+        survivors = 0
+        tombstones = 0
+        for _key, value in merge_newest(tables):
+            if value is None:
+                tombstones += 1
+            else:
+                survivors += 1
+        stats = {"input_tables": len(tables), "records_read": input_records,
+                 "records_emitted": survivors, "tombstones_removed": tombstones,
+                 "obsolete_records_removed": input_records - survivors - tombstones,
+                 "bytes_read": scanned, "input_table_bytes": input_bytes}
+
+        if survivors == 0:
+            # everything got deleted, nothing to write (sstable can't be empty). dropping inputs oldest first is
+            # safe, newest version of every key is a tombstone
+            self._sstables = []
+            self._retire(tables)
+        else:
+            # pass 2: same merge again, streamed into the new table (never held in memory)
+            new_path = self._cmp_path(self._take_id())
+            sstable.write_sstable(new_path, _live_entries(tables), index_interval=self._index_interval,
+                                  bloom_bits_per_key=self._bloom_bits_per_key, expected_count=survivors)
+            # rename inside write_sstable is the commit point, after it recovery treats the old tables as obsolete.
+            # opening the new table re-checks footer/index/filter
+            try:
+                new_table = SSTable(new_path, cache=self._block_cache)
+            except Exception:
+                os.remove(new_path)  # nothing else changed yet, old tables are still the truth
+                fsync_dir(self._dir)
+                raise
+            stats["output_tables"] = 1
+            stats["records_read"] += input_records
+            stats["bytes_read"] += scanned
+            stats["bytes_written"] = os.path.getsize(new_path)
+            stats["output_table_bytes"] = stats["bytes_written"]
+            self._sstables = [new_table]
+            self._retire(tables)
+        stats["duration_s"] = time.perf_counter() - started
+        return self._record(stats)
+
+    def compaction_stats(self):
+        return self._with_amplification(dict(self._totals))
+
+    def table_count(self):
+        return len(self._sstables)
 
     def __enter__(self):
         return self
@@ -203,6 +298,63 @@ class KVStore:
 
     def _sst_path(self, sst_id):
         return os.path.join(self._dir, "sst-%08d.sst" % sst_id)
+
+    def _cmp_path(self, table_id):
+        return os.path.join(self._dir, "cmp-%08d.sst" % table_id)
+
+    def _is_compacted(self, table):
+        return os.path.basename(table.path).startswith("cmp-")
+
+    def _with_amplification(self, run):
+        if run["input_table_bytes"]:
+            run["write_amplification"] = run["bytes_written"] / run["input_table_bytes"]
+        else:
+            run["write_amplification"] = 0.0
+        return run
+
+    def _record(self, stats):
+        run = {}
+        for key in _STAT_KEYS:
+            run[key] = stats.get(key, 0)
+        run["compactions"] = 1 if stats else 0
+        for key in _STAT_KEYS:
+            self._totals[key] += run[key]
+        return self._with_amplification(run)
+
+    def _retire(self, old_tables):
+        for table in old_tables:
+            self._block_cache.discard_table(table.path)
+        for table in old_tables:
+            os.remove(table.path)
+        fsync_dir(self._dir)
+
+    def _discover_tables(self):
+        found = []  # (id, kind, file name)
+        for name in os.listdir(self._dir):
+            if name.endswith(".tmp") and _TABLE_RE.match(name[:-4]):
+                os.remove(os.path.join(self._dir, name))  # an unfinished build never had its final name
+            else:
+                m = _TABLE_RE.match(name)
+                if m:
+                    found.append((int(m.group(2)), m.group(1), name))
+        found.sort()
+        barrier = 0
+        for table_id, kind, _ in found:
+            if kind == "cmp" and table_id > barrier:
+                barrier = table_id
+        obsolete = []
+        for entry in found:
+            if entry[0] < barrier:
+                obsolete.append(entry)
+        for _, _, name in obsolete:  # oldest first
+            os.remove(os.path.join(self._dir, name))
+        if obsolete:
+            fsync_dir(self._dir)
+        live = []
+        for table_id, _, name in found:
+            if table_id >= barrier:
+                live.append((table_id, os.path.join(self._dir, name)))
+        return live
 
     def _check_open(self):
         if self._wal.closed:
