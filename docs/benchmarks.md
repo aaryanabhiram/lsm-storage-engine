@@ -1,6 +1,6 @@
 # Benchmarks
 
-There are two benchmarks: the original **~1.24 MB baseline** (the V0 benchmark, below) and the **scaling characterization** (the V0 scaling benchmark, further down; 10,000 to 10,000,000 records). They use different workloads, so don't compare their numbers directly. The V1 benchmark is described in [V1 benchmark](#v1-benchmark). The V2 benchmark is described in [V2 benchmark](#v2-benchmark).
+V0 has two benchmarks. The first is the original baseline (the V0 benchmark, below), which works on a dataset of about 1.24 MB. The second is the scaling characterization (the V0 scaling benchmark, further down), which runs from 10,000 to 10,000,000 records. The two use different workloads, so don't compare their numbers directly. V1 to V6 each have their own section ([V1](#v1-benchmark), [V2](#v2-benchmark), [V3](#v3-benchmark), [V4](#v4-benchmark), [V5](#v5-benchmark), [V6](#v6-benchmark)), and the [V0 → V6 summary](#v0--v6-summary) at the end of the V6 section puts them side by side.
 
 The baseline JSON file holds the metadata, per-run summaries, aggregates and the raw per-operation latencies (in ns) of every run.
 
@@ -1273,7 +1273,7 @@ Added around the unchanged protocol, outside every timed interval:
 - *Replays.* After the timed GET phases, the same GET sequence is replayed twice (untimed) with counters on `SSTable.lookup`, `may_contain`, `locate`, `_scan_block`, `_read_block`, `sstable._open_table` and the record reader: once with a fresh cache of the same capacity, once with capacity 0. The cached replay's cache counters must equal the timed run's (the run is deterministic), its physical block reads must equal its cache misses and its file opens, a GET whose accesses were all hits must open no file, and both replays must return exactly the timed run's results. All of this is asserted in every run.
 - *V4-style structural sample.* 200 hit and 50 miss GETs per run, with a fresh cache, with V4's own counters; compared with V4's recorded sample for the same keys.
 - *Memory probes* (3 per scale, fresh processes): process private bytes after load and after open, as for V4, plus the growth in private bytes while running the standard GET workload with the 8 MiB cache and with capacity 0. The difference is the cache's cost.
-- *Derived model.* `structural.py` derives the block accesses from the table geometry and Bloom filters rebuilt from the keys, replays them through a separate implementation of the cache rules, and asserts agreement with every run's cache counters, physical reads, bytes read and decode work.
+- *Derived model.* the V5 structural analysis derives the block accesses from the table geometry and Bloom filters rebuilt from the keys, replays them through a separate implementation of the cache rules, and asserts agreement with every run's cache counters, physical reads, bytes read and decode work.
 
 **10,000-key head-to-head** (`--baseline`): V0's baseline workload and V1's extended workload with the default limit (no flush occurs, so the cache is never consulted), and V0's baseline workload with the 16 KiB limit (many small tables). 5 runs each; every GET is checked against a reference dict.
 
@@ -1635,7 +1635,7 @@ Python heap retained by the cache after the whole sequence (run 1, `tracemalloc`
 
 ## Analysis
 
-**1. "The cache works" is established structurally, and holds in both workloads.** In every replay of every run, physical block reads equal cache misses equal file opens (`block_reads_equal_cache_misses` is true at every scale that touches a table). 1,277 standard-workload GETs per run were served entirely from the cache and none of them read a block or opened a file, and in the locality workload 0 cache-hit GETs read a block, across 7 configurations and 5 runs. Records decoded, Bloom answers, index searches and tables consulted are identical with and without the cache (the cache saves the open and read, not the decode), and every returned value equals the uncached result. The derived model in `structural.py` (a separate LRU implementation fed by the table geometry and rebuilt Bloom filters) reproduces every measured hit, miss, insertion, eviction, entry count, byte count, physical read and decode count exactly.
+**1. "The cache works" is established structurally, and holds in both workloads.** In every replay of every run, physical block reads equal cache misses equal file opens (`block_reads_equal_cache_misses` is true at every scale that touches a table). 1,277 standard-workload GETs per run were served entirely from the cache and none of them read a block or opened a file, and in the locality workload 0 cache-hit GETs read a block, across 7 configurations and 5 runs. Records decoded, Bloom answers, index searches and tables consulted are identical with and without the cache (the cache saves the open and read, not the decode), and every returned value equals the uncached result. The derived model in the V5 structural analysis (a separate LRU implementation fed by the table geometry and rebuilt Bloom filters) reproduces every measured hit, miss, insertion, eviction, entry count, byte count, physical read and decode count exactly.
 
 **2. "The cache improves latency" is measured in the locality workload, where it is large.** With 179,000 of 200,000 GETs revisiting 1,000 hot blocks, all-GET p50 was 73.1 µs on V4, 73.5 µs on V5 with the cache disabled, and 72.7 µs at 256 KiB, 62.8 µs at 1,024 KiB, 40.2 µs at 2,048 KiB, 36.1 µs at 4,096 KiB and 36.2 µs at 8,192 KiB (hit rates 10.5%, 41.3%, 75.9%, 89.5%, 89.5%). p95 and p99 moved less than p50 (114.4 → 92.0 µs and 219.5 → 146.6 µs, V4 → 8 MiB). The 10.5% of GETs that are cold or first accesses are misses in every cached configuration, which puts the p95 and p99 inside the miss class. Within one cached configuration a cache-hit GET had p50 34.1 µs against 86.3 µs for a cache miss (8 MiB). The two classes decode the same records, and the structural difference between them is that a hit opens no file and reads no block.
 
@@ -1666,3 +1666,507 @@ Python heap retained by the cache after the whole sequence (run 1, `tracemalloc`
 ## Environment
 
 **Environment:** Python 3.10.6; Windows-10-10.0.26300-SP0; Intel64 Family 6 Model 183 Stepping 1, GenuineIntel; 24 logical CPUs; 17.0 GB RAM; seed 42; key 11 B; value 100 B; `sync=False`; default `memtable_limit_bytes` = 4 MiB; index interval 16; Bloom 10 bits per key, 7 hashes; block cache 8 MiB (default).
+
+# V6 benchmark
+
+Purpose: measure what full synchronous compaction ([v6-design.md](v6-design.md)) changes and what it costs. V6 is V5 plus `compact()`, which merges every flushed SSTable into one new table, keeping the newest version of each key and dropping obsolete versions and tombstones. Everything else (WAL, memtable, flush, SSTable format, Bloom filters, sparse index, block cache) is V5's. The question is whether fewer tables and less stale data reduce read amplification, space amplification and GET latency, and how much read and write work the merge itself needs. Each question is answered separately: **structural** read amplification (tables consulted, Bloom checks, records decoded), **physical** data reduction (records, bytes), **measured** latency change, and **compaction cost**. Nothing is assumed to improve. **All numbers are warm OS-cache numbers.** Every figure in this section comes from `benchmarks/results/v6_benchmark.json`, and the V0–V5 reference numbers in the last results section are read from the V0–V5 result files.
+
+## 1. V6 methodology
+
+Every run builds a fresh database in a temporary directory, then measures it **before** and **after** one `compact()` call. Before and after samples are never pooled together. Two workloads are measured and never mixed in one table:
+
+- **Churn (primary).** The standard V0–V5 load (keys `key%08d` in ascending order, 100-byte values from `Random(42)`, `sync=False`, a 4 MiB memtable limit = 4,194,304 bytes of payload, index interval 16, Bloom 10 bits per key / 7 hashes, 8 MiB block cache), followed by a churn phase fixed before any measurement, so that compaction has stale data to remove. The overwrites are records // 5 puts of uniformly drawn keys (with replacement), and every 20th has an empty value. The deletes are records // 20 distinct keys, drawn without replacement, and a tenth of them are written again with a new value. The churn runs in 10 rounds, and each round applies a tenth of the overwrites, a tenth of the deletes, then that round's resurrections. Seeds: random.Random(f'churn:{SEED}:{records}') chooses keys, and random.Random(f'churn-values:{SEED}:{records}') makes values. The churn is spread over the tables (not only the memtable), which is why it runs in rounds.
+- **Control (no stale data).** The standard load only, copied from the churned run's own load before the churn started, so every key exists exactly once. Compaction can then only merge tables, which isolates the effect of fewer tables from the effect of removing stale data. Control runs are made for every run up to 1M records and for one run at 5M and 10M records.
+
+The scale ladder is 10,000, 100,000, 1,000,000, 5,000,000 and 10,000,000 records with 5, 5, 5, 3 and 3 runs (churn) and 5, 5, 5, 1 and 1 control runs. GETs per run are hits 100,000, 5,000, 2,000, 1,000, 1,000 and misses 100,000, 200, 100, 50, 50 (the V2–V5 counts). Each scale runs in its own fresh Python process, one after another on an idle machine. The OS page cache is warm and never manipulated (every database file is read once, untimed, before its first timed open, so that the control database, which is a fresh copy, starts in the same state), and nothing runs in parallel. Only `store.get` calls are timed (one `perf_counter_ns` pair per GET, nearest-rank percentiles using the V0 code). The GET keys are the standard ones: hit draws come from `workload` in `bench.py` (a draw that the churn deleted is replaced by a live key from a separate generator) and misses are above the stored range. Two V6-specific miss-like kinds are added: *in-range misses* (`key_of(i) + b"x"`, between two stored keys) and, in the churn workload, *deleted keys* (tombstone as the newest version; the pool is cycled if it is smaller than the sample).
+
+The sequence for one workload is: open (timed recovery) → structure → timed GETs (hits, misses, in-range misses, deleted keys; empty cache) → untimed read-work sample (V4's own counters, cold cache) → [full scan] → **`compact()`** (timed) → structure → the same timed GETs (the cache is empty again) → untimed sample → [full scan] → close → reopen (timed recovery) → correctness checks. Added around the unchanged GET protocol, outside every timed interval, are each GET's cache outcome (hit counter before and after) and result checksum, the read-work sample (tables consulted, Bloom checks and answers, index lookups, blocks opened and scanned, records and bytes decoded), and the heap retained by the opened tables (`tracemalloc`).
+
+**Correctness.** A reference model (one CRC-32 per key, −1 = absent) is updated by every write, and every timed GET is checked against it. In the runs with a full scan (every run up to 1M records, and run 1 at 5M and 10M), one merge over every table plus the memtable classifies every physical record as live, stale (older than another version) or tombstone, with byte sizes. It also checks the logical contents of the whole database against the model before and after compaction, including the number of live keys. After the final reopen, samples of every category (overwritten, empty-valued, deleted, resurrected, untouched, missing above and inside the range) are checked again, the directory is audited (only `cmp-` tables, no `.tmp`, the files equal the loaded tables) and the cache must be empty. A failed check aborts the benchmark, and nothing is discarded.
+
+**Compaction I/O and memory** are measured in fresh processes on a copy of the churn database (first three runs of each scale). One process opens it, records memory, runs an instrumented `compact()` (a counter on the table-open seam `sstable._open_table` and on `os.fsync`; no production code is changed), and records the peak working set. A second process opens the compacted directory. The timed compactions aren't instrumented.
+
+**What differs from the V0–V5 protocol.** (1) The churn phase and the control copy exist only in V6. (2) At the default limit, 10,000 keys (about 1.1 MB) never fill the 4 MiB memtable, so no SSTable exists and `compact()` correctly does nothing. The 10,000-key row at the default limit is therefore a no-op case, and a supplementary configuration with the 16 KiB limit that V2–V5 used for their small-table baseline (about 70–80 tables) is reported as `S1s`, with 5,000 hit and 1,000 miss GETs per run instead of 100,000 (a miss there consults every table). (3) The before and after GETs run on the same store object, and "after" starts with an empty cache, as "before" does after a fresh open. (4) Recovery "before" is the first open after the load (and churn), and "after" is a reopen after the compacted store was closed. (5) The control workload has one run at 5M and 10M records (time), and the full scan runs once at those scales. The memtable is never compacted: it's part of the logical database but outside every table statistic.
+
+Machine: Python 3.10.6; Windows-10-10.0.26300-SP0; Intel64 Family 6 Model 183 Stepping 1, GenuineIntel; 24 logical CPUs; 17.0 GB RAM. Result file: `benchmarks/results/v6_benchmark.json`.
+
+## Results
+
+### 2. Pre-compaction state
+
+Table structure before `compact()`, from the open store (`SSTables` through `index + filter + footer`) and from one full scan of every table (live keys, stale records and tombstones). The scan is repeated in every run up to 1M records and in run 1 at 5M and 10M, and the workload is deterministic. *Live keys in tables* counts keys whose newest table version is a value, and keys also present in the memtable aren't compacted and are reported separately. *Stale records* are versions older than another version of the same key. A tombstone counts here only when it's the newest version of its key (a tombstone shadowed by a newer value is a stale record).
+
+| workload | runs | SSTables | physical records | live keys in tables | stale records (share) | tombstones (newest version) | SSTable MB | index bytes | Bloom filter bytes | index + filter + footer, share of file bytes | memtable entries (not compacted) |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) churn | 5 | 0 | 0 | 0 | — | 0 | 0.00 | 0 | 0 | — | 10,000 |
+| S1 (10,000) control | 5 | 0 | 0 | 0 | — | 0 | 0.00 | 0 | 0 | — | 10,000 |
+| S1s (10,000; 16 KiB limit) churn | 5 | 80 | 12,285 | 9,630 | 2,285 (18.6%) | 370 | 1.51 | 19,021 | 15,360 | 2.6% | 188 |
+| S1s (10,000; 16 KiB limit) control | 5 | 67 | 9,916 | 9,916 | 0 (0.0%) | 0 | 1.26 | 15,410 | 12,395 | 2.5% | 84 |
+| S2 (100,000) churn | 5 | 2 | 75,574 | 75,574 | 0 (0.0%) | 0 | 9.57 | 108,652 | 94,468 | 2.1% | 41,358 |
+| S2 (100,000) control | 5 | 2 | 75,574 | 75,574 | 0 (0.0%) | 0 | 9.57 | 108,652 | 94,468 | 2.1% | 24,426 |
+| S3 (1,000,000) churn | 5 | 31 | 1,211,368 | 966,959 | 211,368 (17.4%) | 33,041 | 149.0 | 1,741,606 | 1,514,217 | 2.2% | 33,487 |
+| S3 (1,000,000) control | 5 | 26 | 982,462 | 982,462 | 0 (0.0%) | 0 | 124.5 | 1,412,476 | 1,228,084 | 2.1% | 17,538 |
+| S4 (5,000,000) churn | 3 | 158 | 6,198,193 | 4,815,671 | 1,198,193 (19.3%) | 184,329 | 760.0 | 8,911,166 | 7,747,785 | 2.2% | 48,824 |
+| S4 (5,000,000) control | 1 | 132 | 4,987,884 | 4,987,884 | 0 (0.0%) | 0 | 631.9 | 7,171,032 | 6,234,888 | 2.1% | 12,116 |
+| S5 (10,000,000) churn | 3 | 317 | 12,441,173 | 9,632,741 | 2,441,173 (19.6%) | 367,259 | 1,524.8 | 17,886,778 | 15,551,553 | 2.2% | 63,550 |
+| S5 (10,000,000) control | 1 | 264 | 9,975,768 | 9,975,768 | 0 (0.0%) | 0 | 1,263.8 | 14,342,064 | 12,469,776 | 2.1% | 24,232 |
+
+### 3. Compaction cost
+
+One `compact()` per run, timed around the call (the store's own `duration_s` is recorded too). The merge reads every input table **twice** (pass 1 counts survivors so the Bloom filter can be sized, and pass 2 writes them), so records read and bytes read are twice the input. Bytes read are the store's own count of record-region bytes per pass (a logical count of what the merge reads, not filesystem statistics).
+
+| workload | runs | tables in → out | wall seconds: median (min–max) | between-run spread | µs per input record (wall ÷ records of one pass) | records read (both passes) | records emitted | obsolete versions / tombstones dropped |
+|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) churn | 5 | no-op (no SSTables) | — | — | — | — | — | — |
+| S1 (10,000) control | 5 | no-op (no SSTables) | — | — | — | — | — | — |
+| S1s (10,000; 16 KiB limit) churn | 5 | 80 → 1 | 0.183 (0.173–0.196) | 12.9% | 14.9 | 24,570 | 9,630 | 2,285 / 370 |
+| S1s (10,000; 16 KiB limit) control | 5 | 67 → 1 | 0.163 (0.157–0.212) | 33.9% | 16.5 | 19,832 | 9,916 | 0 / 0 |
+| S2 (100,000) churn | 5 | 2 → 1 | 0.961 (0.912–1.025) | 11.7% | 12.7 | 151,148 | 75,574 | 0 / 0 |
+| S2 (100,000) control | 5 | 2 → 1 | 0.925 (0.909–1.029) | 12.9% | 12.2 | 151,148 | 75,574 | 0 / 0 |
+| S3 (1,000,000) churn | 5 | 31 → 1 | 15.2 (14.9–15.9) | 6.5% | 12.6 | 2,422,736 | 966,959 | 211,368 / 33,041 |
+| S3 (1,000,000) control | 5 | 26 → 1 | 13.2 (12.6–13.2) | 4.9% | 13.4 | 1,964,924 | 982,462 | 0 / 0 |
+| S4 (5,000,000) churn | 3 | 158 → 1 | 82.2 (81.7–84.0) | 2.9% | 13.3 | 12,396,386 | 4,815,671 | 1,198,193 / 184,329 |
+| S4 (5,000,000) control | 1 | 132 → 1 | 68.2 (68.2–68.2) | — | 13.7 | 9,975,768 | 4,987,884 | 0 / 0 |
+| S5 (10,000,000) churn | 3 | 317 → 1 | 170.2 (166.6–171.6) | 2.9% | 13.7 | 24,882,346 | 9,632,741 | 2,441,173 / 367,259 |
+| S5 (10,000,000) control | 1 | 264 → 1 | 139.1 (139.1–139.1) | — | 13.9 | 19,951,536 | 9,975,768 | 0 / 0 |
+
+| workload | input table MB | bytes read, both passes, MB (record regions; the store's count) | bytes read ÷ input table bytes | bytes written MB | write amplification (written ÷ input) | input MB per second (wall) |
+|---|---|---|---|---|---|---|
+| S1s (10,000; 16 KiB limit) churn | 1.51 | 2.95 | 1.95 | 1.21 | 0.801 | 8.2 |
+| S1s (10,000; 16 KiB limit) control | 1.26 | 2.46 | 1.95 | 1.26 | 0.996 | 7.7 |
+| S2 (100,000) churn | 9.57 | 18.74 | 1.96 | 9.57 | 1.000 | 10.0 |
+| S2 (100,000) control | 9.57 | 18.74 | 1.96 | 9.57 | 1.000 | 10.4 |
+| S3 (1,000,000) churn | 149.0 | 291.5 | 1.96 | 121.7 | 0.817 | 9.8 |
+| S3 (1,000,000) control | 124.5 | 243.7 | 1.96 | 124.5 | 1.000 | 9.4 |
+| S4 (5,000,000) churn | 760.0 | 1,486.6 | 1.96 | 605.8 | 0.797 | 9.2 |
+| S4 (5,000,000) control | 631.9 | 1,237.0 | 1.96 | 631.9 | 1.000 | 9.3 |
+| S5 (10,000,000) churn | 1,524.8 | 2,982.7 | 1.96 | 1,211.5 | 0.795 | 9.0 |
+| S5 (10,000,000) control | 1,263.8 | 2,474.0 | 1.96 | 1,263.8 | 1.000 | 9.1 |
+
+Counted I/O of one instrumented compaction per probe (a fresh process, churn workload, same code with the table-open seam and `os.fsync` wrapped). The wrapper counts bytes returned by the Python file object to the merge, which is a logical count above the operating system's own buffering and read-ahead. Output bytes are the size of the file written.
+
+| workload | table opens (counted) | file read calls | bytes returned by reads (counted) | = the store's bytes_read | = 2 opens per input table | fsync calls | bytes written (output file size) MB |
+|---|---|---|---|---|---|---|---|
+| S1 (10,000) churn | 0 | 0 | 0 | yes | yes | 0 | 0.00 |
+| S1s (10,000; 16 KiB limit) churn | 160 | 49,300 | 2,948,080 | yes | yes | 1 | 1.21 |
+| S2 (100,000) churn | 4 | 302,300 | 18,742,352 | yes | yes | 1 | 9.57 |
+| S3 (1,000,000) churn | 62 | 4,845,534 | 291,545,864 | yes | yes | 1 | 121.7 |
+| S4 (5,000,000) churn | 316 | 24,793,088 | 1,486,570,264 | yes | yes | 1 | 605.8 |
+| S5 (10,000,000) churn | 634 | 49,765,326 | 2,982,693,504 | yes | yes | 1 | 1,211.5 |
+
+### 4. Post-compaction state
+
+| workload | SSTables | physical records | SSTable MB | sparse-index entries | Bloom filter bytes | index block bytes | change in file bytes | change in index + filter + footer bytes |
+|---|---|---|---|---|---|---|---|---|
+| S1s (10,000; 16 KiB limit) churn | 80 → 1 | 12,285 → 9,630 | 1.51 → 1.21 | 827 → 602 | 15,360 → 12,038 | 19,021 → 13,846 | -19.9% | -33.8% |
+| S1s (10,000; 16 KiB limit) control | 67 → 1 | 9,916 → 9,916 | 1.26 → 1.26 | 670 → 620 | 12,395 → 12,395 | 15,410 → 14,260 | -0.4% | -16.1% |
+| S2 (100,000) churn | 2 → 1 | 75,574 → 75,574 | 9.57 → 9.57 | 4,724 → 4,724 | 94,468 → 94,468 | 108,652 → 108,652 | -0.0% | -0.0% |
+| S2 (100,000) control | 2 → 1 | 75,574 → 75,574 | 9.57 → 9.57 | 4,724 → 4,724 | 94,468 → 94,468 | 108,652 → 108,652 | -0.0% | -0.0% |
+| S3 (1,000,000) churn | 31 → 1 | 1,211,368 → 966,959 | 149.0 → 121.7 | 75,722 → 60,435 | 1,514,217 → 1,208,699 | 1,741,606 → 1,390,005 | -18.3% | -20.2% |
+| S3 (1,000,000) control | 26 → 1 | 982,462 → 982,462 | 124.5 → 124.5 | 61,412 → 61,404 | 1,228,084 → 1,228,078 | 1,412,476 → 1,412,292 | -0.0% | -0.1% |
+| S4 (5,000,000) churn | 158 → 1 | 6,198,193 → 4,815,671 | 760.0 → 605.8 | 387,442 → 300,980 | 7,747,785 → 6,019,589 | 8,911,166 → 6,922,540 | -20.3% | -22.4% |
+| S4 (5,000,000) control | 132 → 1 | 4,987,884 → 4,987,884 | 631.9 → 631.9 | 311,784 → 311,743 | 6,234,888 → 6,234,855 | 7,171,032 → 7,170,089 | -0.0% | -0.1% |
+| S5 (10,000,000) churn | 317 → 1 | 12,441,173 → 9,632,741 | 1,524.8 → 1,211.5 | 777,686 → 602,047 | 15,551,553 → 12,040,927 | 17,886,778 → 13,847,081 | -20.5% | -22.6% |
+| S5 (10,000,000) control | 264 → 1 | 9,975,768 → 9,975,768 | 1,263.8 → 1,263.8 | 623,568 → 623,486 | 12,469,776 → 12,469,710 | 14,342,064 → 14,340,178 | -0.0% | -0.1% |
+
+### 5. GET before vs after
+
+Timed GETs on the same store object, before and after `compact()`, each starting from an empty block cache (compaction discards the retired tables' blocks). Percentiles are pooled over the runs of the workload, and before and after samples are never mixed. *Hit* keys are the standard hit draws (a draw that churn deleted is replaced, so every hit key is live). *Miss* keys are the standard keys above the stored range. *In-range miss* keys are `key_of(i) + b"x"`, which sort between stored keys and were never written. *Deleted key* keys have a tombstone as their newest version (churn only). Change is after relative to before (negative = faster). The between-run spread is (max − min) of the per-run p50 over their median.
+
+**GET hit**
+
+| workload | samples (pooled over runs) | before: p50 / p95 / p99 (µs) | after: p50 / p95 / p99 (µs) | change (p50 / p95 / p99) | between-run spread of the p50: before / after |
+|---|---|---|---|---|---|
+| S1 (10,000) churn | 500,000 | 0.5 / 0.7 / 0.8 | 0.4 / 0.6 / 0.8 | -20.0% / -14.3% / +0.0% | 0.0% / 25.0% |
+| S1 (10,000) control | 500,000 | 0.5 / 0.6 / 0.8 | 0.5 / 0.6 / 0.8 | +0.0% / +0.0% / +0.0% | 20.0% / 25.0% |
+| S1s (10,000; 16 KiB limit) churn | 25,000 | 77.6 / 154.0 / 210.9 | 17.6 / 58.7 / 76.9 | -77.3% / -61.9% / -63.5% | 10.3% / 4.5% |
+| S1s (10,000; 16 KiB limit) control | 25,000 | 68.8 / 128.9 / 182.8 | 19.3 / 62.1 / 79.4 | -71.9% / -51.8% / -56.6% | 9.4% / 13.1% |
+| S2 (100,000) churn | 25,000 | 24.5 / 84.2 / 139.5 | 23.9 / 76.2 / 125.5 | -2.4% / -9.5% / -10.0% | 12.9% / 12.6% |
+| S2 (100,000) control | 25,000 | 44.8 / 75.4 / 122.7 | 44.8 / 80.4 / 159.5 | +0.0% / +6.6% / +30.0% | 11.5% / 10.7% |
+| S3 (1,000,000) churn | 10,000 | 83.3 / 202.1 / 356.3 | 60.9 / 84.6 / 123.7 | -26.9% / -58.1% / -65.3% | 24.9% / 13.4% |
+| S3 (1,000,000) control | 10,000 | 75.5 / 111.7 / 185.2 | 58.4 / 86.6 / 155.3 | -22.6% / -22.5% / -16.1% | 6.1% / 12.0% |
+| S4 (5,000,000) churn | 3,000 | 194.3 / 345.0 / 461.6 | 57.4 / 91.1 / 174.0 | -70.5% / -73.6% / -62.3% | 9.5% / 4.9% |
+| S4 (5,000,000) control | 1,000 | 159.1 / 287.4 / 403.9 | 60.3 / 78.6 / 95.5 | -62.1% / -72.7% / -76.4% | — / — |
+| S5 (10,000,000) churn | 3,000 | 335.9 / 605.7 / 731.6 | 63.0 / 106.4 / 198.9 | -81.2% / -82.4% / -72.8% | 10.8% / 21.1% |
+| S5 (10,000,000) control | 1,000 | 276.0 / 489.6 / 615.3 | 81.4 / 134.0 / 201.1 | -70.5% / -72.6% / -67.3% | — / — |
+
+**GET miss (key above the stored range)**
+
+| workload | samples (pooled over runs) | before: p50 / p95 / p99 (µs) | after: p50 / p95 / p99 (µs) | change (p50 / p95 / p99) | between-run spread of the p50: before / after |
+|---|---|---|---|---|---|
+| S1 (10,000) churn | 500,000 | 0.5 / 0.6 / 0.8 | 0.5 / 0.6 / 0.7 | +0.0% / +0.0% / -12.5% | 0.0% / 20.0% |
+| S1 (10,000) control | 500,000 | 0.5 / 0.7 / 0.8 | 0.5 / 0.6 / 0.7 | +0.0% / -14.3% / -12.5% | 20.0% / 20.0% |
+| S1s (10,000; 16 KiB limit) churn | 5,000 | 117.2 / 158.9 / 238.0 | 1.9 / 2.7 / 20.8 | -98.4% / -98.3% / -91.3% | 16.3% / 21.1% |
+| S1s (10,000; 16 KiB limit) control | 5,000 | 102.3 / 136.7 / 229.3 | 1.9 / 2.6 / 18.6 | -98.1% / -98.1% / -91.9% | 11.2% / 22.2% |
+| S2 (100,000) churn | 1,000 | 3.7 / 5.1 / 26.1 | 2.1 / 3.3 / 16.8 | -43.2% / -35.3% / -35.6% | 21.6% / 25.0% |
+| S2 (100,000) control | 1,000 | 3.4 / 5.0 / 27.1 | 2.1 / 3.2 / 19.3 | -38.2% / -36.0% / -28.8% | 30.3% / 19.0% |
+| S3 (1,000,000) churn | 500 | 45.4 / 125.1 / 166.2 | 2.3 / 4.1 / 95.8 | -94.9% / -96.7% / -42.4% | 29.7% / 18.2% |
+| S3 (1,000,000) control | 500 | 40.9 / 128.5 / 178.1 | 2.2 / 3.5 / 7.2 | -94.6% / -97.3% / -96.0% | 23.9% / 28.6% |
+| S4 (5,000,000) churn | 150 | 311.4 / 474.3 / 703.1 | 2.1 / 3.2 / 5.8 | -99.3% / -99.3% / -99.2% | 25.6% / 4.8% |
+| S4 (5,000,000) control | 50 | 268.1 / 421.9 / 452.6 | 1.9 / 3.3 / 80.9 | -99.3% / -99.2% / -82.1% | — / — |
+| S5 (10,000,000) churn | 150 | 650.2 / 897.0 / 1,089 | 2.2 / 3.5 / 5.4 | -99.7% / -99.6% / -99.5% | 21.3% / 18.2% |
+| S5 (10,000,000) control | 50 | 529.1 / 851.0 / 1,036 | 2.0 / 3.5 / 6.4 | -99.6% / -99.6% / -99.4% | — / — |
+
+**GET miss (key inside the stored range)**
+
+| workload | samples (pooled over runs) | before: p50 / p95 / p99 (µs) | after: p50 / p95 / p99 (µs) | change (p50 / p95 / p99) | between-run spread of the p50: before / after |
+|---|---|---|---|---|---|
+| S1 (10,000) churn | 500,000 | 0.5 / 0.6 / 0.7 | 0.5 / 0.6 / 0.7 | +0.0% / +0.0% / +0.0% | 0.0% / 20.0% |
+| S1 (10,000) control | 500,000 | 0.5 / 0.6 / 0.7 | 0.5 / 0.6 / 0.8 | +0.0% / +0.0% / +14.3% | 0.0% / 0.0% |
+| S1s (10,000; 16 KiB limit) churn | 5,000 | 111.3 / 149.2 / 195.5 | 2.0 / 2.9 / 3.8 | -98.2% / -98.1% / -98.1% | 14.7% / 20.0% |
+| S1s (10,000; 16 KiB limit) control | 5,000 | 101.1 / 127.7 / 176.6 | 1.9 / 2.6 / 3.4 | -98.1% / -98.0% / -98.1% | 8.2% / 21.1% |
+| S2 (100,000) churn | 1,000 | 3.6 / 4.7 / 5.4 | 2.1 / 2.9 / 5.0 | -41.7% / -38.3% / -7.4% | 22.2% / 30.0% |
+| S2 (100,000) control | 1,000 | 3.4 / 4.6 / 7.2 | 2.1 / 2.9 / 6.5 | -38.2% / -37.0% / -9.7% | 26.5% / 19.0% |
+| S3 (1,000,000) churn | 500 | 45.1 / 109.7 / 174.7 | 2.2 / 3.4 / 4.1 | -95.1% / -96.9% / -97.7% | 37.8% / 23.8% |
+| S3 (1,000,000) control | 500 | 41.1 / 76.5 / 140.9 | 2.1 / 3.2 / 3.9 | -94.9% / -95.8% / -97.2% | 25.1% / 19.0% |
+| S4 (5,000,000) churn | 150 | 252.5 / 427.8 / 522.6 | 1.9 / 2.7 / 3.2 | -99.2% / -99.4% / -99.4% | 19.9% / 5.3% |
+| S4 (5,000,000) control | 50 | 175.6 / 380.2 / 472.6 | 1.8 / 3.2 / 11.5 | -99.0% / -99.2% / -97.6% | — / — |
+| S5 (10,000,000) churn | 150 | 599.9 / 764.8 / 1,165 | 2.1 / 3.1 / 3.6 | -99.6% / -99.6% / -99.7% | 14.2% / 14.3% |
+| S5 (10,000,000) control | 50 | 440.8 / 693.4 / 749.9 | 2.1 / 3.2 / 4.1 | -99.5% / -99.5% / -99.5% | — / — |
+
+**GET of a deleted key (churn workload)**
+
+| workload | samples (pooled over runs) | before: p50 / p95 / p99 (µs) | after: p50 / p95 / p99 (µs) | change (p50 / p95 / p99) | between-run spread of the p50: before / after |
+|---|---|---|---|---|---|
+| S1 (10,000) churn | 500,000 | 0.4 / 0.6 / 0.8 | 0.4 / 0.6 / 0.8 | +0.0% / +0.0% / +0.0% | 25.0% / 25.0% |
+| S1s (10,000; 16 KiB limit) churn | 5,000 | 24.5 / 42.8 / 56.9 | 2.0 / 2.9 / 12.0 | -91.8% / -93.2% / -78.9% | 24.1% / 20.0% |
+| S2 (100,000) churn | 1,000 | 0.6 / 0.9 / 1.0 | 0.5 / 0.8 / 1.1 | -16.7% / -11.1% / +10.0% | 16.7% / 40.0% |
+| S3 (1,000,000) churn | 500 | 65.2 / 109.6 / 169.1 | 2.2 / 3.9 / 77.9 | -96.6% / -96.4% / -53.9% | 37.5% / 23.8% |
+| S4 (5,000,000) churn | 150 | 94.5 / 166.8 / 289.5 | 1.9 / 2.8 / 3.6 | -98.0% / -98.3% / -98.8% | 11.9% / 5.3% |
+| S5 (10,000,000) churn | 150 | 156.7 / 293.8 / 368.5 | 2.4 / 4.1 / 103.2 | -98.5% / -98.6% / -72.0% | 8.9% / 18.2% |
+
+Structural read work per GET (untimed, instrumented sample on a cold cache: 200 hit GETs and 50 GETs of each miss-like kind per run; means over the runs; "before → after"):
+
+| workload | GET kind | sampled GETs | SSTables consulted | Bloom checks | tables opened (block reads) | blocks scanned | records decoded | bytes decoded |
+|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) churn | hit | 1000 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S1 (10,000) churn | miss | 250 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S1 (10,000) churn | in-range miss | 250 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S1 (10,000) churn | deleted key | 250 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S1 (10,000) control | hit | 1000 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S1 (10,000) control | miss | 250 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S1 (10,000) control | in-range miss | 250 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S1s (10,000; 16 KiB limit) churn | hit | 1000 | 39.9 → 1.0 | 39.9 → 1.0 | 0.9 → 0.8 | 1.1 → 1.0 | 9.2 → 8.1 | 1,100 → 996 |
+| S1s (10,000; 16 KiB limit) churn | miss | 250 | 80.0 → 1.0 | 80.0 → 1.0 | 0.6 → 0.0 | 0.8 → 0.0 | 3.7 → 0.3 | 443 → 35 |
+| S1s (10,000; 16 KiB limit) churn | in-range miss | 250 | 80.0 → 1.0 | 80.0 → 1.0 | 0.4 → 0.0 | 0.4 → 0.0 | 1.8 → 0.0 | 209 → 0 |
+| S1s (10,000; 16 KiB limit) churn | deleted key | 250 | 11.5 → 1.0 | 11.5 → 1.0 | 0.5 → 0.0 | 1.0 → 0.0 | 7.8 → 0.3 | 675 → 37 |
+| S1s (10,000; 16 KiB limit) control | hit | 1000 | 34.1 → 1.0 | 34.1 → 1.0 | 0.8 → 0.8 | 1.0 → 1.0 | 8.4 → 8.7 | 1,042 → 1,081 |
+| S1s (10,000; 16 KiB limit) control | miss | 250 | 67.0 → 1.0 | 67.0 → 1.0 | 0.5 → 0.0 | 0.7 → 0.0 | 2.7 → 0.0 | 337 → 0 |
+| S1s (10,000; 16 KiB limit) control | in-range miss | 250 | 67.0 → 1.0 | 67.0 → 1.0 | 0.3 → 0.0 | 0.3 → 0.0 | 1.3 → 0.0 | 159 → 0 |
+| S2 (100,000) churn | hit | 1000 | 0.9 → 0.6 | 0.9 → 0.6 | 0.6 → 0.6 | 0.6 → 0.6 | 4.7 → 5.1 | 579 → 636 |
+| S2 (100,000) churn | miss | 250 | 2.0 → 1.0 | 2.0 → 1.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.1 | 0 → 15 |
+| S2 (100,000) churn | in-range miss | 250 | 2.0 → 1.0 | 2.0 → 1.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S2 (100,000) churn | deleted key | 250 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S2 (100,000) control | hit | 1000 | 1.1 → 0.7 | 1.1 → 0.7 | 0.7 → 0.7 | 0.7 → 0.7 | 6.1 → 6.5 | 751 → 801 |
+| S2 (100,000) control | miss | 250 | 2.0 → 1.0 | 2.0 → 1.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.1 | 0 → 15 |
+| S2 (100,000) control | in-range miss | 250 | 2.0 → 1.0 | 2.0 → 1.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0.0 → 0.0 | 0 → 0 |
+| S3 (1,000,000) churn | hit | 1000 | 15.1 → 1.0 | 15.1 → 1.0 | 1.0 → 1.0 | 1.0 → 1.0 | 8.7 → 8.1 | 1,040 → 996 |
+| S3 (1,000,000) churn | miss | 250 | 31.0 → 1.0 | 31.0 → 1.0 | 0.2 → 0.0 | 0.2 → 0.0 | 2.3 → 0.0 | 281 → 0 |
+| S3 (1,000,000) churn | in-range miss | 250 | 31.0 → 1.0 | 31.0 → 1.0 | 0.1 → 0.0 | 0.1 → 0.0 | 1.4 → 0.0 | 165 → 0 |
+| S3 (1,000,000) churn | deleted key | 250 | 5.0 → 1.0 | 5.0 → 1.0 | 1.0 → 0.0 | 1.0 → 0.0 | 8.5 → 0.1 | 788 → 17 |
+| S3 (1,000,000) control | hit | 1000 | 13.6 → 1.0 | 13.6 → 1.0 | 1.0 → 1.0 | 1.0 → 1.0 | 8.7 → 8.1 | 1,082 → 1,001 |
+| S3 (1,000,000) control | miss | 250 | 26.0 → 1.0 | 26.0 → 1.0 | 0.2 → 0.0 | 0.2 → 0.0 | 2.2 → 0.0 | 273 → 0 |
+| S3 (1,000,000) control | in-range miss | 250 | 26.0 → 1.0 | 26.0 → 1.0 | 0.1 → 0.0 | 0.1 → 0.0 | 1.1 → 0.0 | 136 → 0 |
+| S4 (5,000,000) churn | hit | 600 | 77.6 → 1.0 | 77.6 → 1.0 | 1.2 → 1.0 | 1.2 → 1.0 | 10.6 → 8.2 | 1,269 → 1,017 |
+| S4 (5,000,000) churn | miss | 150 | 158.0 → 1.0 | 158.0 → 1.0 | 1.2 → 0.0 | 1.4 → 0.0 | 14.8 → 0.0 | 1,812 → 0 |
+| S4 (5,000,000) churn | in-range miss | 150 | 158.0 → 1.0 | 158.0 → 1.0 | 0.4 → 0.0 | 0.5 → 0.0 | 4.6 → 0.0 | 552 → 0 |
+| S4 (5,000,000) churn | deleted key | 150 | 24.0 → 1.0 | 24.0 → 1.0 | 1.1 → 0.0 | 1.1 → 0.0 | 8.0 → 0.0 | 639 → 0 |
+| S4 (5,000,000) control | hit | 200 | 67.5 → 1.0 | 67.5 → 1.0 | 1.0 → 1.0 | 1.0 → 1.0 | 8.4 → 8.4 | 1,040 → 1,042 |
+| S4 (5,000,000) control | miss | 50 | 132.0 → 1.0 | 132.0 → 1.0 | 1.0 → 0.0 | 1.2 → 0.0 | 13.2 → 0.2 | 1,637 → 30 |
+| S4 (5,000,000) control | in-range miss | 50 | 132.0 → 1.0 | 132.0 → 1.0 | 0.3 → 0.0 | 0.4 → 0.0 | 3.9 → 0.0 | 489 → 0 |
+| S5 (10,000,000) churn | hit | 600 | 153.8 → 1.0 | 153.8 → 1.0 | 1.4 → 1.0 | 1.4 → 1.0 | 12.8 → 8.6 | 1,521 → 1,056 |
+| S5 (10,000,000) churn | miss | 150 | 317.0 → 1.0 | 317.0 → 1.0 | 2.3 → 0.0 | 2.7 → 0.0 | 27.7 → 0.0 | 3,395 → 0 |
+| S5 (10,000,000) churn | in-range miss | 150 | 317.0 → 1.0 | 317.0 → 1.0 | 1.4 → 0.0 | 1.5 → 0.0 | 16.0 → 0.0 | 1,962 → 0 |
+| S5 (10,000,000) churn | deleted key | 150 | 48.0 → 1.0 | 48.0 → 1.0 | 1.5 → 0.0 | 1.5 → 0.0 | 12.3 → 0.1 | 908 → 12 |
+| S5 (10,000,000) control | hit | 200 | 136.4 → 1.0 | 136.4 → 1.0 | 1.0 → 1.0 | 1.0 → 1.0 | 8.7 → 8.4 | 1,076 → 1,045 |
+| S5 (10,000,000) control | miss | 50 | 264.0 → 1.0 | 264.0 → 1.0 | 2.0 → 0.0 | 2.3 → 0.0 | 25.5 → 0.0 | 3,164 → 0 |
+| S5 (10,000,000) control | in-range miss | 50 | 264.0 → 1.0 | 264.0 → 1.0 | 1.1 → 0.0 | 1.2 → 0.0 | 13.4 → 0.0 | 1,662 → 0 |
+
+What it would take to repay the compaction in GET time alone, derived from the pooled mean latencies above and the median compaction wall time. It's an arithmetic consequence of the measurements, not a measured quantity, and it assumes the same latency saving on every later GET:
+
+| workload | GET kind | mean before (µs) | mean after (µs) | mean saving per GET (µs) | GETs of this kind to repay the compaction's wall time |
+|---|---|---|---|---|---|
+| S1s (10,000; 16 KiB limit) churn | hit | 81.1 | 21.6 | 59.5 | 3,082 |
+| S1s (10,000; 16 KiB limit) churn | miss | 121.0 | 2.2 | 118.8 | 1,544 |
+| S1s (10,000; 16 KiB limit) churn | in-range miss | 115.0 | 2.2 | 112.8 | 1,626 |
+| S1s (10,000; 16 KiB limit) churn | deleted key | 24.6 | 2.2 | 22.4 | 8,201 |
+| S1s (10,000; 16 KiB limit) control | hit | 71.4 | 23.8 | 47.6 | 3,435 |
+| S1s (10,000; 16 KiB limit) control | miss | 106.4 | 2.2 | 104.2 | 1,569 |
+| S1s (10,000; 16 KiB limit) control | in-range miss | 102.1 | 2.1 | 100.0 | 1,634 |
+| S2 (100,000) churn | hit | 34.0 | 32.5 | 1.6 | 615,620 |
+| S2 (100,000) churn | miss | 4.7 | 2.5 | 2.2 | 433,028 |
+| S2 (100,000) churn | in-range miss | 3.8 | 2.7 | 1.1 | 907,641 |
+| S2 (100,000) churn | deleted key | 0.6 | 0.6 | 0.0 | 533,995,611 |
+| S2 (100,000) control | hit | 37.4 | 39.0 | -1.6 | no saving |
+| S2 (100,000) control | miss | 4.7 | 2.6 | 2.1 | 430,773 |
+| S2 (100,000) control | in-range miss | 3.7 | 3.0 | 0.7 | 1,420,817 |
+| S3 (1,000,000) churn | hit | 96.2 | 61.9 | 34.4 | 443,444 |
+| S3 (1,000,000) churn | miss | 58.7 | 3.5 | 55.2 | 276,036 |
+| S3 (1,000,000) churn | in-range miss | 52.5 | 2.3 | 50.2 | 303,685 |
+| S3 (1,000,000) churn | deleted key | 70.0 | 4.0 | 66.0 | 230,927 |
+| S3 (1,000,000) control | hit | 77.9 | 60.9 | 16.9 | 777,907 |
+| S3 (1,000,000) control | miss | 55.3 | 2.7 | 52.6 | 250,356 |
+| S3 (1,000,000) control | in-range miss | 46.4 | 2.2 | 44.2 | 297,986 |
+| S4 (5,000,000) churn | hit | 199.2 | 62.1 | 137.1 | 599,660 |
+| S4 (5,000,000) churn | miss | 317.6 | 2.3 | 315.3 | 260,654 |
+| S4 (5,000,000) churn | in-range miss | 274.2 | 2.0 | 272.2 | 301,978 |
+| S4 (5,000,000) churn | deleted key | 103.5 | 2.0 | 101.5 | 809,626 |
+| S4 (5,000,000) control | hit | 165.5 | 61.5 | 104.0 | 655,989 |
+| S4 (5,000,000) control | miss | 276.7 | 3.7 | 273.1 | 249,741 |
+| S4 (5,000,000) control | in-range miss | 205.1 | 2.1 | 203.0 | 335,923 |
+| S5 (10,000,000) churn | hit | 337.9 | 69.2 | 268.7 | 633,538 |
+| S5 (10,000,000) churn | miss | 657.3 | 2.4 | 654.8 | 259,917 |
+| S5 (10,000,000) churn | in-range miss | 603.3 | 2.2 | 601.1 | 283,146 |
+| S5 (10,000,000) churn | deleted key | 182.2 | 4.8 | 177.5 | 959,174 |
+| S5 (10,000,000) control | hit | 278.8 | 90.5 | 188.3 | 738,774 |
+| S5 (10,000,000) control | miss | 559.9 | 2.3 | 557.6 | 249,463 |
+| S5 (10,000,000) control | in-range miss | 464.3 | 2.2 | 462.1 | 301,045 |
+
+### 6. Recovery before vs after
+
+*Before* is the first `KVStore(path)` after `close()` of the freshly loaded (and churned) database, and *after* is the reopen after the compacted store was closed. The component columns re-run the steps of recovery with the modules' own functions right after the measured open (directory listing, opening every table, replaying the WAL segments). They explain the structure of the open, but they're separate repetitions and don't sum exactly to it.
+
+| workload | before: open seconds, median (min–max) | after: open seconds, median (min–max) | after ÷ before | table-open step (ms, re-run) | WAL replay step (ms, re-run) | directory listing (ms, re-run) | tables loaded | index entries loaded | Bloom filter bytes read | WAL entries replayed |
+|---|---|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) churn | 0.014 (0.012–0.015) | 0.013 (0.012–0.014) | 0.94 | 0.00 → 0.00 | 12.85 → 11.24 | 0.08 → 0.07 | 0 → 0 | 0 → 0 | 0 → 0 | 10,000 → 10,000 |
+| S1 (10,000) control | 0.010 (0.009–0.010) | 0.011 (0.009–0.012) | 1.11 | 0.00 → 0.00 | 8.79 → 9.47 | 0.05 → 0.07 | 0 → 0 | 0 → 0 | 0 → 0 | 10,000 → 10,000 |
+| S1s (10,000; 16 KiB limit) churn | 0.007 (0.007–0.008) | 0.001 (0.001–0.001) | 0.17 | 5.32 → 0.33 | 0.25 → 0.37 | 0.52 → 0.06 | 80 → 1 | 827 → 602 | 15,360 → 12,038 | 188 → 188 |
+| S1s (10,000; 16 KiB limit) control | 0.006 (0.005–0.006) | 0.001 (0.001–0.001) | 0.19 | 4.43 → 0.37 | 0.16 → 0.27 | 0.40 → 0.07 | 67 → 1 | 670 → 620 | 12,395 → 12,395 | 84 → 84 |
+| S2 (100,000) churn | 0.061 (0.052–0.064) | 0.053 (0.051–0.059) | 0.87 | 2.08 → 2.10 | 50.54 → 48.48 | 0.08 → 0.09 | 2 → 1 | 4,724 → 4,724 | 94,468 → 94,468 | 41,358 → 41,358 |
+| S2 (100,000) control | 0.027 (0.025–0.035) | 0.029 (0.027–0.032) | 1.10 | 2.20 → 2.07 | 23.54 → 24.75 | 0.08 → 0.09 | 2 → 1 | 4,724 → 4,724 | 94,468 → 94,468 | 24,426 → 24,426 |
+| S3 (1,000,000) churn | 0.076 (0.064–0.082) | 0.063 (0.062–0.063) | 0.83 | 35.09 → 24.83 | 33.84 → 31.80 | 0.20 → 0.08 | 31 → 1 | 75,722 → 60,435 | 1,514,217 → 1,208,699 | 33,487 → 33,487 |
+| S3 (1,000,000) control | 0.048 (0.041–0.055) | 0.044 (0.040–0.048) | 0.90 | 28.16 → 24.87 | 18.12 → 16.56 | 0.17 → 0.09 | 26 → 1 | 61,412 → 61,404 | 1,228,084 → 1,228,078 | 17,538 → 17,538 |
+| S4 (5,000,000) churn | 0.230 (0.227–0.257) | 0.181 (0.181–0.187) | 0.79 | 173.81 → 135.27 | 47.48 → 48.35 | 0.35 → 0.11 | 158 → 1 | 387,442 → 300,980 | 7,747,785 → 6,019,589 | 48,824 → 48,824 |
+| S4 (5,000,000) control | 0.155 (0.155–0.155) | 0.151 (0.151–0.151) | 0.97 | 146.47 → 144.77 | 10.09 → 13.80 | 1.37 → 0.09 | 132 → 1 | 311,784 → 311,743 | 6,234,888 → 6,234,855 | 12,116 → 12,116 |
+| S5 (10,000,000) churn | 0.404 (0.398–0.410) | 0.310 (0.308–0.327) | 0.77 | 340.12 → 250.78 | 56.33 → 59.89 | 0.58 → 0.09 | 317 → 1 | 777,686 → 602,047 | 15,551,553 → 12,040,927 | 63,550 → 63,550 |
+| S5 (10,000,000) control | 0.295 (0.295–0.295) | 0.317 (0.317–0.317) | 1.07 | 275.63 → 290.97 | 24.27 → 22.91 | 0.61 → 0.10 | 264 → 1 | 623,568 → 623,486 | 12,469,776 → 12,469,710 | 24,232 → 24,232 |
+
+### 7. Space amplification before vs after
+
+*Space amplification* here is SSTable file bytes ÷ live key+value payload bytes, where the live payload is the keys and values of keys whose newest table version is a value (the keys and values only, no record headers). Everything above 1 is overhead: 13-byte record headers on live records, stale versions, tombstones, and the index, Bloom filter and footer of every table. The last column checks that these parts add up to the file bytes exactly. The memtable and WAL are not part of it.
+
+| workload | live key+value payload MB | SSTable MB before | SSTable MB after | space amplification (file bytes ÷ live payload) | stale record bytes removed MB | tombstone record bytes removed MB | bytes freed MB | freed share of the file bytes before | file bytes = payload + live headers + stale + tombstones + index/filter/footer (before and after) |
+|---|---|---|---|---|---|---|---|---|---|
+| S1s (10,000; 16 KiB limit) churn | 1.06 | 1.51 | 1.21 | 1.427 → 1.143 | 0.28 | 0.01 | 0.30 | 19.9% | yes |
+| S1s (10,000; 16 KiB limit) control | 1.10 | 1.26 | 1.26 | 1.146 → 1.141 | 0.00 | 0.00 | 0.01 | 0.4% | yes |
+| S2 (100,000) churn | 8.39 | 9.57 | 9.57 | 1.141 → 1.141 | 0.00 | 0.00 | 0.00 | 0.0% | yes |
+| S2 (100,000) control | 8.39 | 9.57 | 9.57 | 1.141 → 1.141 | 0.00 | 0.00 | 0.00 | 0.0% | yes |
+| S3 (1,000,000) churn | 106.5 | 149.0 | 121.7 | 1.399 → 1.142 | 25.87 | 0.79 | 27.32 | 18.3% | yes |
+| S3 (1,000,000) control | 109.1 | 124.5 | 124.5 | 1.141 → 1.141 | 0.00 | 0.00 | 0.00 | 0.0% | yes |
+| S4 (5,000,000) churn | 530.2 | 760.0 | 605.8 | 1.433 → 1.142 | 146.0 | 4.42 | 154.2 | 20.3% | yes |
+| S4 (5,000,000) control | 553.7 | 631.9 | 631.9 | 1.141 → 1.141 | 0.00 | 0.00 | 0.01 | 0.0% | yes |
+| S5 (10,000,000) churn | 1,060.4 | 1,524.8 | 1,211.5 | 1.438 → 1.143 | 296.9 | 8.81 | 313.3 | 20.5% | yes |
+| S5 (10,000,000) control | 1,107.3 | 1,263.8 | 1,263.8 | 1.141 → 1.141 | 0.00 | 0.00 | 0.02 | 0.0% | yes |
+
+### 8. Write amplification
+
+Compaction rewrites surviving data, so it adds bytes written on top of the flushes that created the input tables. *User bytes* are the keys and values of every PUT and the keys of every DELETE the workload issued (including overwrites). *WAL bytes* are the record bytes appended (every operation is logged once). *Flush bytes* are the SSTable bytes the flushes wrote (all of them are present before compaction, because nothing was compacted earlier). *Compaction written ÷ input* is the compaction write amplification reported by the store.
+
+| workload | user key+value bytes written MB | WAL bytes MB | flush (SSTable) bytes MB | compaction bytes written MB | (WAL + flush) ÷ user | (WAL + flush + compaction) ÷ user | compaction ÷ flush bytes |
+|---|---|---|---|---|---|---|---|
+| S1s (10,000; 16 KiB limit) churn | 1.33 | 1.50 | 1.51 | 1.21 | 2.258 | 3.166 | 0.801 |
+| S1s (10,000; 16 KiB limit) control | 1.11 | 1.24 | 1.26 | 1.26 | 2.254 | 3.385 | 0.996 |
+| S2 (100,000) churn | 13.33 | 14.96 | 9.57 | 9.57 | 1.841 | 2.559 | 1.000 |
+| S2 (100,000) control | 11.10 | 12.40 | 9.57 | 9.57 | 1.980 | 2.842 | 1.000 |
+| S3 (1,000,000) churn | 133.3 | 149.6 | 149.0 | 121.7 | 2.240 | 3.153 | 0.817 |
+| S3 (1,000,000) control | 111.0 | 124.0 | 124.5 | 124.5 | 2.238 | 3.360 | 1.000 |
+| S4 (5,000,000) churn | 666.5 | 748.1 | 760.0 | 605.8 | 2.263 | 3.171 | 0.797 |
+| S4 (5,000,000) control | 555.0 | 620.0 | 631.9 | 631.9 | 2.256 | 3.394 | 1.000 |
+| S5 (10,000,000) churn | 1,333.0 | 1,496.2 | 1,524.8 | 1,211.5 | 2.266 | 3.175 | 0.795 |
+| S5 (10,000,000) control | 1,110.0 | 1,240.0 | 1,263.8 | 1,263.8 | 2.256 | 3.394 | 1.000 |
+
+### 9. Memory
+
+Process memory in fresh processes (the probes run on a copy of the churn database in the first three runs of each scale). This covers private bytes added by opening the store, before and after compaction (a separate process opens the compacted directory), and the compaction's own working memory, measured as the peak working set reached during `compact()` above the working set of the opened store. The table heap is Python heap retained by the opened `SSTable` objects (tracemalloc; sparse indexes, Bloom filter blocks and objects), measured in-process. The merge streams its input and output, so it doesn't hold the database in memory (it keeps one open file handle and one decoded record per input table per pass), but its peak working set above the opened store isn't constant across scales.
+
+| workload | probes | open: private bytes added, before MB | open: private bytes added, after MB | compaction: peak working set above the opened store MB | compaction: private bytes change (after − before) MB | heap held by the opened tables (tracemalloc) MB | of which Bloom filter bytes MB |
+|---|---|---|---|---|---|---|---|
+| S1 (10,000) churn | 3 | 2.01 | 1.98 | 0.00 | 0.00 | 0.00 → 0.00 | 0.00 → 0.00 |
+| S1s (10,000; 16 KiB limit) churn | 3 | 0.00 | 0.00 | 1.71 | -0.67 | 0.13 → 0.07 | 0.02 → 0.01 |
+| S2 (100,000) churn | 3 | 8.31 | 8.44 | 1.31 | 0.70 | 0.52 → 0.52 | 0.09 → 0.09 |
+| S3 (1,000,000) churn | 3 | 15.26 | 12.18 | 12.35 | 4.44 | 8.30 → 6.56 | 1.51 → 1.21 |
+| S4 (5,000,000) churn | 3 | 55.07 | 42.50 | 59.21 | -5.91 | 42.43 → 32.89 | 7.75 → 6.02 |
+| S5 (10,000,000) churn | 3 | 101.2 | 78.73 | 117.5 | -12.46 | 85.10 → 66.17 | 15.55 → 12.04 |
+
+### 10. Cache behavior
+
+Block-cache counters over all timed GET phases of one run (hit keys, misses, in-range misses, deleted keys), starting empty, before and after compaction (counters are deterministic, and run 1 is shown). The cache is the V5 cache (8 MiB, LRU by bytes), and compaction discards the retired tables' blocks, so the "after" stage starts empty.
+
+| workload | stage | block accesses (all GET phases of a run) | hits | misses | hit rate | insertions | evictions | entries at the end | bytes at the end |
+|---|---|---|---|---|---|---|---|---|---|
+| S1 (10,000) churn | before | 0 | 0 | 0 | — | 0 | 0 | 0 | 0 |
+| S1 (10,000) churn | after | 0 | 0 | 0 | — | 0 | 0 | 0 | 0 |
+| S1 (10,000) control | before | 0 | 0 | 0 | — | 0 | 0 | 0 | 0 |
+| S1 (10,000) control | after | 0 | 0 | 0 | — | 0 | 0 | 0 | 0 |
+| S1s (10,000; 16 KiB limit) churn | before | 7,466 | 6,643 | 823 | 89.0% | 823 | 0 | 823 | 1,466,104 |
+| S1s (10,000; 16 KiB limit) churn | after | 4,938 | 4,337 | 601 | 87.8% | 601 | 0 | 601 | 1,183,636 |
+| S1s (10,000; 16 KiB limit) control | before | 5,840 | 5,171 | 669 | 88.5% | 669 | 0 | 669 | 1,227,600 |
+| S1s (10,000; 16 KiB limit) control | after | 4,970 | 4,351 | 619 | 87.5% | 619 | 0 | 619 | 1,227,600 |
+| S2 (100,000) churn | before | 3,144 | 881 | 2,263 | 28.0% | 2,263 | 0 | 2,263 | 4,488,552 |
+| S2 (100,000) churn | after | 3,146 | 872 | 2,274 | 27.7% | 2,274 | 0 | 2,274 | 4,510,376 |
+| S2 (100,000) control | before | 3,812 | 1,232 | 2,580 | 32.3% | 2,580 | 0 | 2,580 | 5,117,480 |
+| S2 (100,000) control | after | 3,814 | 1,217 | 2,597 | 31.9% | 2,597 | 0 | 2,597 | 5,151,208 |
+| S3 (1,000,000) churn | before | 2,149 | 42 | 2,107 | 2.0% | 2,107 | 0 | 2,107 | 4,001,516 |
+| S3 (1,000,000) churn | after | 1,946 | 33 | 1,913 | 1.7% | 1,913 | 0 | 1,913 | 3,769,768 |
+| S3 (1,000,000) control | before | 1,992 | 43 | 1,949 | 2.2% | 1,949 | 0 | 1,949 | 3,855,036 |
+| S3 (1,000,000) control | after | 1,959 | 30 | 1,929 | 1.5% | 1,929 | 0 | 1,929 | 3,827,136 |
+| S4 (5,000,000) churn | before | 1,340 | 21 | 1,319 | 1.6% | 1,319 | 0 | 1,319 | 2,429,640 |
+| S4 (5,000,000) churn | after | 995 | 4 | 991 | 0.4% | 991 | 0 | 991 | 1,951,144 |
+| S4 (5,000,000) control | before | 1,076 | 21 | 1,055 | 2.0% | 1,055 | 0 | 1,055 | 2,055,920 |
+| S4 (5,000,000) control | after | 999 | 6 | 993 | 0.6% | 993 | 0 | 993 | 1,969,616 |
+| S5 (10,000,000) churn | before | 1,658 | 45 | 1,613 | 2.7% | 1,613 | 0 | 1,613 | 2,928,664 |
+| S5 (10,000,000) churn | after | 999 | 1 | 998 | 0.1% | 998 | 0 | 998 | 1,964,732 |
+| S5 (10,000,000) control | before | 1,174 | 42 | 1,132 | 3.6% | 1,132 | 0 | 1,132 | 2,161,568 |
+| S5 (10,000,000) control | after | 997 | 1 | 996 | 0.1% | 996 | 0 | 996 | 1,976,064 |
+
+### Correctness and reconciliation
+
+Every run reconciles the compaction's statistics with the structure measured before and after (tables in and out, records read = 2 × input, emitted + obsolete + tombstones = input, bytes read = 2 × record bytes, bytes written = output file size) and, where a full scan ran, with an independent classification of every physical record. A failed identity aborts the benchmark. All timed GETs are checked against the reference model, and after the final reopen the sample of keys of every category below is checked again.
+
+| workload | runs reconciled | identities per run | runs with a full scan and verification | keys checked after the final reopen, per run | table structure identical in every run | compaction statistics identical in every run | after reopen: only `cmp-` tables, no `.tmp` files, cache empty |
+|---|---|---|---|---|---|---|---|
+| S1 (10,000) churn | 5 | 1 | 5 | 12,399 | yes | yes | yes |
+| S1 (10,000) control | 5 | 1 | 5 | 8,000 | yes | yes | yes |
+| S1s (10,000; 16 KiB limit) churn | 5 | 17 | 5 | 9,399 | yes | yes | yes |
+| S1s (10,000; 16 KiB limit) control | 5 | 17 | 5 | 6,000 | yes | yes | yes |
+| S2 (100,000) churn | 5 | 17 | 5 | 9,998 | yes | yes | yes |
+| S2 (100,000) control | 5 | 17 | 5 | 4,400 | yes | yes | yes |
+| S3 (1,000,000) churn | 5 | 17 | 5 | 12,300 | yes | yes | yes |
+| S3 (1,000,000) control | 5 | 17 | 5 | 4,200 | yes | yes | yes |
+| S4 (5,000,000) churn | 3 | 17 | 1 | 11,150 | yes | yes | yes |
+| S4 (5,000,000) control | 1 | 17 | 1 | 3,100 | yes | yes | yes |
+| S5 (10,000,000) churn | 3 | 17 | 1 | 11,150 | yes | yes | yes |
+| S5 (10,000,000) control | 1 | 17 | 1 | 3,100 | yes | yes | yes |
+
+Crash and restart sanity (small databases; the implementation's own tests hold the full crash-window matrix). Each case runs on a copy of one churned database and is followed by a reopen and a check of every record against the reference model:
+
+| database | case | SSTables before compaction | table files after reopen | `cmp-` tables | old `sst-` tables left | `.tmp` files | live keys (= reference model) | all records match the model | second compaction is a no-op |
+|---|---|---|---|---|---|---|---|---|---|
+| 10,000 keys, 16,384 B limit | completed_then_reopen | 80 | 1 | 1 | 0 | 0 | 9,589 | yes | True |
+| 10,000 keys, 16,384 B limit | crash_after_commit_before_cleanup | 80 | 1 | 1 | 0 | 0 | 9,589 | yes | — |
+| 10,000 keys, 16,384 B limit | crash_during_cleanup | 80 | 1 | 1 | 0 | 0 | 9,589 | yes | — |
+| 10,000 keys, 16,384 B limit | crash_during_output_write | 80 | 80 | 0 | 80 | 0 | 9,589 | yes | — |
+| 100,000 keys, 4,194,304 B limit | completed_then_reopen | 2 | 1 | 1 | 0 | 0 | 95,895 | yes | True |
+| 100,000 keys, 4,194,304 B limit | crash_after_commit_before_cleanup | 2 | 1 | 1 | 0 | 0 | 95,895 | yes | — |
+| 100,000 keys, 4,194,304 B limit | crash_during_cleanup | 2 | 1 | 1 | 0 | 0 | 95,895 | yes | — |
+| 100,000 keys, 4,194,304 B limit | crash_during_output_write | 2 | 2 | 0 | 2 | 0 | 95,895 | yes | — |
+
+### V0 → V6 summary
+
+Each dimension is shown separately. The rows are different architectures measured on workloads of the same shape, and V6 appears before and after one compaction, on the control workload (every key stored once: The V0–V5 workload) and on the churn workload. These aren't combined into one number. Cells are the V0–V5 values from their result files (unchanged).
+
+**GET hit latency, p50 / p99 (µs)**
+
+| version / state | S1 (10,000) | S2 (100,000) | S3 (1,000,000) | S4 (5,000,000) | S5 (10,000,000) |
+|---|---|---|---|---|---|
+| V0 | 7,816 / 10,364 | 80,706 / 92,623 | 812,992 / 900,483 | 4,100,732 / 4,410,328 | 7,841,657 / 8,200,102 |
+| V1 | 0.4 / 0.8 | 0.5 / 1.0 | 0.7 / 1.6 | 0.7 / 1.6 | 0.8 / 1.7 |
+| V2 | 0.4 / 0.7 | 17,902 / 53,720 | 24,978 / 52,936 | 29,844 / 55,890 | 29,664 / 60,101 |
+| V3 | 0.4 / 0.8 | 46.6 / 154.9 | 54.2 / 174.1 | 76.8 / 271.8 | 107.7 / 286.0 |
+| V4 | 0.4 / 0.9 | 52.6 / 177.8 | 75.1 / 246.7 | 161.9 / 465.9 | 282.4 / 701.3 |
+| V5 | 0.5 / 0.8 | 43.7 / 139.1 | 73.9 / 189.1 | 157.9 / 436.3 | 265.5 / 681.3 |
+| V6 control, before | 0.5 / 0.8 | 44.8 / 122.7 | 75.5 / 185.2 | 159.1 / 403.9 | 276.0 / 615.3 |
+| V6 control, after | 0.5 / 0.8 | 44.8 / 159.5 | 58.4 / 155.3 | 60.3 / 95.5 | 81.4 / 201.1 |
+| V6 churn, before | 0.5 / 0.8 | 24.5 / 139.5 | 83.3 / 356.3 | 194.3 / 461.6 | 335.9 / 731.6 |
+| V6 churn, after | 0.4 / 0.8 | 23.9 / 125.5 | 60.9 / 123.7 | 57.4 / 174.0 | 63.0 / 198.9 |
+
+**GET miss latency, p50 / p99 (µs)**
+
+| version / state | S1 (10,000) | S2 (100,000) | S3 (1,000,000) | S4 (5,000,000) | S5 (10,000,000) |
+|---|---|---|---|---|---|
+| V0 | 7,941 / 11,009 | 81,481 / 92,665 | 825,678 / 917,134 | 4,051,031 / 4,313,507 | 7,901,652 / 8,376,783 |
+| V1 | 0.4 / 0.8 | 0.4 / 0.7 | 0.5 / 0.9 | 0.5 / 1.0 | 0.6 / 1.0 |
+| V2 | 0.4 / 0.6 | 100,632 / 114,326 | 1,307,443 / 1,392,108 | 6,568,458 / 6,895,766 | 13,167,709 / 13,887,550 |
+| V3 | 0.4 / 0.9 | 103.7 / 315.4 | 1,375 / 2,276 | 7,502 / 9,206 | 14,500 / 19,400 |
+| V4 | 0.4 / 0.8 | 3.4 / 55.5 | 34.7 / 161.9 | 269.7 / 712.8 | 556.0 / 1,154 |
+| V5 | 0.5 / 0.8 | 3.3 / 22.0 | 32.0 / 124.1 | 251.5 / 481.8 | 507.5 / 1,003 |
+| V6 control, before | 0.5 / 0.8 | 3.4 / 27.1 | 40.9 / 178.1 | 268.1 / 452.6 | 529.1 / 1,036 |
+| V6 control, after | 0.5 / 0.7 | 2.1 / 19.3 | 2.2 / 7.2 | 1.9 / 80.9 | 2.0 / 6.4 |
+| V6 churn, before | 0.5 / 0.8 | 3.7 / 26.1 | 45.4 / 166.2 | 311.4 / 703.1 | 650.2 / 1,089 |
+| V6 churn, after | 0.5 / 0.7 | 2.1 / 16.8 | 2.3 / 95.8 | 2.1 / 5.8 | 2.2 / 5.4 |
+
+**Open / recovery time, median seconds** (V0 scans the whole file, V1 replays the whole WAL, V2–V6 load tables and replay the WAL tail)
+
+| version / state | S1 (10,000) | S2 (100,000) | S3 (1,000,000) | S4 (5,000,000) | S5 (10,000,000) |
+|---|---|---|---|---|---|
+| V0 | 0.016 | 0.093 | 0.788 | 3.837 | 7.811 |
+| V1 | 0.020 | 0.105 | 1.061 | 5.353 | 11.022 |
+| V2 | 0.021 | 0.033 | 0.029 | 0.033 | 0.078 |
+| V3 | 0.021 | 0.037 | 0.055 | 0.171 | 0.353 |
+| V4 | 0.018 | 0.037 | 0.054 | 0.172 | 0.359 |
+| V5 | 0.020 | 0.038 | 0.052 | 0.156 | 0.344 |
+| V6 control, before | 0.010 | 0.027 | 0.048 | 0.155 | 0.295 |
+| V6 control, after | 0.011 | 0.029 | 0.044 | 0.151 | 0.317 |
+| V6 churn, before | 0.014 | 0.061 | 0.076 | 0.230 | 0.404 |
+| V6 churn, after | 0.013 | 0.053 | 0.063 | 0.181 | 0.310 |
+
+**Memory added by opening the store, private MB** (first memory probe of each scale; V6 from the churn probes)
+
+| version / state | S1 (10,000) | S2 (100,000) | S3 (1,000,000) | S4 (5,000,000) | S5 (10,000,000) |
+|---|---|---|---|---|---|
+| V1 | 2.68 | 24.77 | 236.0 | 1,135.7 | 2,273.1 |
+| V2 | 1.65 | 5.34 | 2.69 | 3.83 | 4.33 |
+| V3 | 1.72 | 4.10 | 10.60 | 32.81 | 66.11 |
+| V4 | 1.84 | 5.90 | 11.62 | 40.33 | 81.75 |
+| V5 | 2.36 | 5.70 | 12.08 | 39.95 | 81.14 |
+| V6 churn, before | 2.01 | 8.31 | 15.26 | 55.07 | 101.2 |
+| V6 churn, after | 1.98 | 8.44 | 12.18 | 42.50 | 78.73 |
+
+**Structural read work per sampled GET: tables consulted / records decoded for hits ; the same for misses**
+
+| version / state | S1 (10,000) | S2 (100,000) | S3 (1,000,000) | S4 (5,000,000) | S5 (10,000,000) |
+|---|---|---|---|---|---|
+| V2 | 0.0 / 0.0 ; 0.0 / 0.0 | 1.1 / 14157.3 ; 2.0 / 75574.0 | 13.6 / 18998.9 ; 26.0 / 982462.0 | 67.5 / 20041.2 ; 132.0 / 4987884.0 | 136.4 / 19236.3 ; 264.0 / 9975768.0 |
+| V3 | 0.0 / 0.0 ; 0.0 / 0.0 | 1.1 / 0.4 ; 2.0 / 0.0 | 13.6 / 12.6 ; 26.0 / 0.0 | 67.5 / 66.5 ; 132.0 / 0.0 | 136.4 / 135.4 ; 264.0 / 0.0 |
+| V4 | 0.0 / 0.0 ; 0.0 / 0.0 | 1.1 / 6.1 ; 2.0 / 0.0 | 13.6 / 8.7 ; 26.0 / 2.2 | 67.5 / 8.4 ; 132.0 / 13.2 | 136.4 / 8.7 ; 264.0 / 25.5 |
+| V5 | 0.0 / 0.0 ; 0.0 / 0.0 | 1.1 / 6.1 ; 2.0 / 0.0 | 13.6 / 8.7 ; 26.0 / 2.2 | 67.5 / 8.4 ; 132.0 / 13.2 | 136.4 / 8.7 ; 264.0 / 25.5 |
+| V6 control, before | 0.0 / 0.0 ; 0.0 / 0.0 | 1.1 / 6.1 ; 2.0 / 0.0 | 13.6 / 8.7 ; 26.0 / 2.2 | 67.5 / 8.4 ; 132.0 / 13.2 | 136.4 / 8.7 ; 264.0 / 25.5 |
+| V6 control, after | 0.0 / 0.0 ; 0.0 / 0.0 | 0.7 / 6.5 ; 1.0 / 0.1 | 1.0 / 8.1 ; 1.0 / 0.0 | 1.0 / 8.4 ; 1.0 / 0.2 | 1.0 / 8.4 ; 1.0 / 0.0 |
+| V6 churn, before | 0.0 / 0.0 ; 0.0 / 0.0 | 0.9 / 4.7 ; 2.0 / 0.0 | 15.1 / 8.7 ; 31.0 / 2.3 | 77.6 / 10.6 ; 158.0 / 14.8 | 153.8 / 12.8 ; 317.0 / 27.7 |
+| V6 churn, after | 0.0 / 0.0 ; 0.0 / 0.0 | 0.6 / 5.1 ; 1.0 / 0.1 | 1.0 / 8.1 ; 1.0 / 0.0 | 1.0 / 8.2 ; 1.0 / 0.0 | 1.0 / 8.6 ; 1.0 / 0.0 |
+
+## Analysis
+
+**1. Structural read amplification.** Compaction replaced every flushed table with one, so a GET never has more than one table to consult, and a miss pays one Bloom check instead of one per table. Per sampled GET (means over the sample, churn workload): S1s (10,000; 16 KiB limit) churn: 80 tables → 1; tables consulted per hit GET 39.9 → 1.0, Bloom checks per miss GET 80.0 → 1.0, records decoded per hit GET 9.2 → 8.1, per miss GET 3.72 → 0.28; S2 (100,000) churn: 2 tables → 1; tables consulted per hit GET 0.9 → 0.6, Bloom checks per miss GET 2.0 → 1.0, records decoded per hit GET 4.7 → 5.1, per miss GET 0.00 → 0.12; S3 (1,000,000) churn: 31 tables → 1; tables consulted per hit GET 15.1 → 1.0, Bloom checks per miss GET 31.0 → 1.0, records decoded per hit GET 8.7 → 8.1, per miss GET 2.28 → 0.00; S4 (5,000,000) churn: 158 tables → 1; tables consulted per hit GET 77.6 → 1.0, Bloom checks per miss GET 158.0 → 1.0, records decoded per hit GET 10.6 → 8.2, per miss GET 14.84 → 0.00; S5 (10,000,000) churn: 317 tables → 1; tables consulted per hit GET 153.8 → 1.0, Bloom checks per miss GET 317.0 → 1.0, records decoded per hit GET 12.8 → 8.6, per miss GET 27.72 → 0.00. A GET that reaches a block still scans one block of up to 16 records, so records decoded per hit GET doesn't fall in proportion to the table count: it depends on how many Bloom false positives and how many older tables a hit had to pass, which the same table shows.
+
+**2. Physical data reduction.** S1s (10,000; 16 KiB limit) churn: 2,285 stale records (18.6% of 12,285) and 370 tombstones dropped; SSTable bytes 1.5 MB → 1.2 MB (19.9% freed); space amplification 1.427 → 1.143; S2 (100,000) churn: 0 stale records (0.0% of 75,574) and 0 tombstones dropped; SSTable bytes 9.6 MB → 9.6 MB (0.0% freed); space amplification 1.141 → 1.141; S3 (1,000,000) churn: 211,368 stale records (17.4% of 1,211,368) and 33,041 tombstones dropped; SSTable bytes 149.0 MB → 121.7 MB (18.3% freed); space amplification 1.399 → 1.142; S4 (5,000,000) churn: 1,198,193 stale records (19.3% of 6,198,193) and 184,329 tombstones dropped; SSTable bytes 760.0 MB → 605.8 MB (20.3% freed); space amplification 1.433 → 1.142; S5 (10,000,000) churn: 2,441,173 stale records (19.6% of 12,441,173) and 367,259 tombstones dropped; SSTable bytes 1,524.8 MB → 1,211.5 MB (20.5% freed); space amplification 1.438 → 1.143. The file bytes before and after decompose exactly into live payload, live record headers, stale records, tombstones and index/filter/footer. So the reduction is accounted for by what was dropped plus the per-table overhead of the tables that disappeared. What remains above 1.0 after compaction is the 13-byte header per record plus the index and Bloom filter of the one table.
+
+**Control (every key stored once).** There's no stale data to drop, so the only physical change is the per-table overhead: S1s (10,000; 16 KiB limit) control: 1.1460 → 1.1414 (5,110 bytes freed); S2 (100,000) control: 1.1413 → 1.1413 (60 bytes freed); S3 (1,000,000) control: 1.1413 → 1.1413 (1,690 bytes freed); S4 (5,000,000) control: 1.1413 → 1.1413 (8,836 bytes freed); S5 (10,000,000) control: 1.1413 → 1.1413 (17,732 bytes freed).
+
+**3. Measured latency, GET hit.** S1s (10,000; 16 KiB limit) churn: p50 77.6 → 17.6 µs, -77.3% (lower; the between-run spread of the p50 is 10.3%); p99 210.9 → 76.9 µs (-63.5%, 25,000 samples); S1s (10,000; 16 KiB limit) control: p50 68.8 → 19.3 µs, -71.9% (lower; the between-run spread of the p50 is 13.1%); p99 182.8 → 79.4 µs (-56.6%, 25,000 samples); S2 (100,000) churn: p50 24.5 → 23.9 µs, -2.4% (lower, but within twice the between-run spread of 12.9%: not resolved); p99 139.5 → 125.5 µs (-10.0%, 25,000 samples); S2 (100,000) control: p50 44.8 → 44.8 µs, +0.0% (unchanged, but within twice the between-run spread of 11.5%: not resolved); p99 122.7 → 159.5 µs (+30.0%, 25,000 samples); S3 (1,000,000) churn: p50 83.3 → 60.9 µs, -26.9% (lower, but within twice the between-run spread of 24.9%: not resolved); p99 356.3 → 123.7 µs (-65.3%, 10,000 samples); S3 (1,000,000) control: p50 75.5 → 58.4 µs, -22.6% (lower, but within twice the between-run spread of 12.0%: not resolved); p99 185.2 → 155.3 µs (-16.1%, 10,000 samples); S4 (5,000,000) churn: p50 194.3 → 57.4 µs, -70.5% (lower; the between-run spread of the p50 is 9.5%); p99 461.6 → 174.0 µs (-62.3%, 3,000 samples); S4 (5,000,000) control: p50 159.1 → 60.3 µs, -62.1%; p99 403.9 → 95.5 µs (-76.4%, 1,000 samples); S5 (10,000,000) churn: p50 335.9 → 63.0 µs, -81.2% (lower; the between-run spread of the p50 is 21.1%); p99 731.6 → 198.9 µs (-72.8%, 3,000 samples); S5 (10,000,000) control: p50 276.0 → 81.4 µs, -70.5%; p99 615.3 → 201.1 µs (-67.3%, 1,000 samples).
+
+**3. Measured latency, GET miss (above the range).** S1s (10,000; 16 KiB limit) churn: p50 117.2 → 1.9 µs, -98.4% (lower; the between-run spread of the p50 is 21.1%); p99 238.0 → 20.8 µs (-91.3%, 5,000 samples); S1s (10,000; 16 KiB limit) control: p50 102.3 → 1.9 µs, -98.1% (lower; the between-run spread of the p50 is 22.2%); p99 229.3 → 18.6 µs (-91.9%, 5,000 samples); S2 (100,000) churn: p50 3.7 → 2.1 µs, -43.2% (lower, but within twice the between-run spread of 25.0%: not resolved); p99 26.1 → 16.8 µs (-35.6%, 1,000 samples); S2 (100,000) control: p50 3.4 → 2.1 µs, -38.2% (lower, but within twice the between-run spread of 30.3%: not resolved); p99 27.1 → 19.3 µs (-28.8%, 1,000 samples); S3 (1,000,000) churn: p50 45.4 → 2.3 µs, -94.9% (lower; the between-run spread of the p50 is 29.7%); p99 166.2 → 95.8 µs (-42.4%, 500 samples); S3 (1,000,000) control: p50 40.9 → 2.2 µs, -94.6% (lower; the between-run spread of the p50 is 28.6%); p99 178.1 → 7.2 µs (-96.0%, 500 samples); S4 (5,000,000) churn: p50 311.4 → 2.1 µs, -99.3% (lower; the between-run spread of the p50 is 25.6%); p99 703.1 → 5.8 µs (-99.2%, 150 samples); S4 (5,000,000) control: p50 268.1 → 1.9 µs, -99.3%; p99 452.6 → 80.9 µs (-82.1%, 50 samples); S5 (10,000,000) churn: p50 650.2 → 2.2 µs, -99.7% (lower; the between-run spread of the p50 is 21.3%); p99 1,089 → 5.4 µs (-99.5%, 150 samples); S5 (10,000,000) control: p50 529.1 → 2.0 µs, -99.6%; p99 1,036 → 6.4 µs (-99.4%, 50 samples).
+
+**3. Measured latency, GET miss (inside the range).** S1s (10,000; 16 KiB limit) churn: p50 111.3 → 2.0 µs, -98.2% (lower; the between-run spread of the p50 is 20.0%); p99 195.5 → 3.8 µs (-98.1%, 5,000 samples); S1s (10,000; 16 KiB limit) control: p50 101.1 → 1.9 µs, -98.1% (lower; the between-run spread of the p50 is 21.1%); p99 176.6 → 3.4 µs (-98.1%, 5,000 samples); S2 (100,000) churn: p50 3.6 → 2.1 µs, -41.7% (lower, but within twice the between-run spread of 30.0%: not resolved); p99 5.4 → 5.0 µs (-7.4%, 1,000 samples); S2 (100,000) control: p50 3.4 → 2.1 µs, -38.2% (lower, but within twice the between-run spread of 26.5%: not resolved); p99 7.2 → 6.5 µs (-9.7%, 1,000 samples); S3 (1,000,000) churn: p50 45.1 → 2.2 µs, -95.1% (lower; the between-run spread of the p50 is 37.8%); p99 174.7 → 4.1 µs (-97.7%, 500 samples); S3 (1,000,000) control: p50 41.1 → 2.1 µs, -94.9% (lower; the between-run spread of the p50 is 25.1%); p99 140.9 → 3.9 µs (-97.2%, 500 samples); S4 (5,000,000) churn: p50 252.5 → 1.9 µs, -99.2% (lower; the between-run spread of the p50 is 19.9%); p99 522.6 → 3.2 µs (-99.4%, 150 samples); S4 (5,000,000) control: p50 175.6 → 1.8 µs, -99.0%; p99 472.6 → 11.5 µs (-97.6%, 50 samples); S5 (10,000,000) churn: p50 599.9 → 2.1 µs, -99.6% (lower; the between-run spread of the p50 is 14.3%); p99 1,165 → 3.6 µs (-99.7%, 150 samples); S5 (10,000,000) control: p50 440.8 → 2.1 µs, -99.5%; p99 749.9 → 4.1 µs (-99.5%, 50 samples).
+
+**3. Measured latency, GET of a deleted key.** S1s (10,000; 16 KiB limit) churn: p50 24.5 → 2.0 µs, -91.8% (lower; the between-run spread of the p50 is 24.1%); p99 56.9 → 12.0 µs (-78.9%, 5,000 samples); S2 (100,000) churn: p50 0.6 → 0.5 µs, -16.7% (lower, but within twice the between-run spread of 40.0%: not resolved); p99 1.0 → 1.1 µs (+10.0%, 1,000 samples); S3 (1,000,000) churn: p50 65.2 → 2.2 µs, -96.6% (lower; the between-run spread of the p50 is 37.5%); p99 169.1 → 77.9 µs (-53.9%, 500 samples); S4 (5,000,000) churn: p50 94.5 → 1.9 µs, -98.0% (lower; the between-run spread of the p50 is 11.9%); p99 289.5 → 3.6 µs (-98.8%, 150 samples); S5 (10,000,000) churn: p50 156.7 → 2.4 µs, -98.5% (lower; the between-run spread of the p50 is 18.2%); p99 368.5 → 103.2 µs (-72.0%, 150 samples).
+
+**No-op case.** S1 (10,000) churn: no SSTable exists, `compact()` returned zeros and changed nothing (hit p50 0.5 → 0.4 µs, -20.0% (lower, but within twice the between-run spread of 25.0%: not resolved)); S1 (10,000) control: no SSTable exists, `compact()` returned zeros and changed nothing (hit p50 0.5 → 0.5 µs, +0.0% (unchanged, but within twice the between-run spread of 25.0%: not resolved)). The difference between the two numbers of a no-op row is the measurement's own before/after variation.
+
+**4. Cost of the merge.** S1s (10,000; 16 KiB limit) churn: 0.18 s (14.9 µs per input record, 8.2 MB/s), read 2.9 MB (1.95× the 1.5 MB of input tables), wrote 1.2 MB (write amplification 0.801); S2 (100,000) churn: 0.96 s (12.7 µs per input record, 10.0 MB/s), read 18.7 MB (1.96× the 9.6 MB of input tables), wrote 9.6 MB (write amplification 1.000); S3 (1,000,000) churn: 15.24 s (12.6 µs per input record, 9.8 MB/s), read 291.5 MB (1.96× the 149.0 MB of input tables), wrote 121.7 MB (write amplification 0.817); S4 (5,000,000) churn: 82.19 s (13.3 µs per input record, 9.2 MB/s), read 1,486.6 MB (1.96× the 760.0 MB of input tables), wrote 605.8 MB (write amplification 0.797); S5 (10,000,000) churn: 170.21 s (13.7 µs per input record, 9.0 MB/s), read 2,982.7 MB (1.96× the 1,524.8 MB of input tables), wrote 1,211.5 MB (write amplification 0.795); S1s (10,000; 16 KiB limit) control: 0.16 s (16.5 µs per input record, 7.7 MB/s), read 2.5 MB (1.95× the 1.3 MB of input tables), wrote 1.3 MB (write amplification 0.996); S2 (100,000) control: 0.92 s (12.2 µs per input record, 10.4 MB/s), read 18.7 MB (1.96× the 9.6 MB of input tables), wrote 9.6 MB (write amplification 1.000); S3 (1,000,000) control: 13.17 s (13.4 µs per input record, 9.4 MB/s), read 243.7 MB (1.96× the 124.5 MB of input tables), wrote 124.5 MB (write amplification 1.000); S4 (5,000,000) control: 68.19 s (13.7 µs per input record, 9.3 MB/s), read 1,237.0 MB (1.96× the 631.9 MB of input tables), wrote 631.9 MB (write amplification 1.000); S5 (10,000,000) control: 139.10 s (13.9 µs per input record, 9.1 MB/s), read 2,474.0 MB (1.96× the 1,263.8 MB of input tables), wrote 1,263.8 MB (write amplification 1.000). The merge reads every input record twice (the survivor count must be known to size the Bloom filter), validates every checksum, key order, index entry and Bloom filter of the inputs on both passes, and rewrites what survives; the cost is paid immediately, in the calling thread, with reads and writes blocked. The wall time includes that validation and the Bloom hashing, which is why it's CPU- and not I/O-shaped in a warm-cache run.
+
+**Write amplification.** Compaction is extra write work, not a free optimization: S1s (10,000; 16 KiB limit) churn: (WAL + flush) ÷ user bytes 2.26 → 3.17 with the compaction (compaction wrote 0.80× the flush bytes); S2 (100,000) churn: (WAL + flush) ÷ user bytes 1.84 → 2.56 with the compaction (compaction wrote 1.00× the flush bytes); S3 (1,000,000) churn: (WAL + flush) ÷ user bytes 2.24 → 3.15 with the compaction (compaction wrote 0.82× the flush bytes); S4 (5,000,000) churn: (WAL + flush) ÷ user bytes 2.26 → 3.17 with the compaction (compaction wrote 0.80× the flush bytes); S5 (10,000,000) churn: (WAL + flush) ÷ user bytes 2.27 → 3.18 with the compaction (compaction wrote 0.79× the flush bytes).
+
+**Break-even (derived).** Repaying the compaction's wall time from the mean per-GET saving alone would take: S1s (10,000; 16 KiB limit) churn: 3,082 hit GETs, 1,544 miss GETs, 1,626 miss inrange GETs, 8,201 deleted GETs; S2 (100,000) churn: 615,620 hit GETs, 433,028 miss GETs, 907,641 miss inrange GETs, 533,995,611 deleted GETs; S3 (1,000,000) churn: 443,444 hit GETs, 276,036 miss GETs, 303,685 miss inrange GETs, 230,927 deleted GETs; S4 (5,000,000) churn: 599,660 hit GETs, 260,654 miss GETs, 301,978 miss inrange GETs, 809,626 deleted GETs; S5 (10,000,000) churn: 633,538 hit GETs, 259,917 miss GETs, 283,146 miss inrange GETs, 959,174 deleted GETs. Workloads that never read, or read only the memtable, never recover the cost.
+
+**5. Recovery.** S1s (10,000; 16 KiB limit) churn: 0.007 → 0.001 s (-82.6%; tables loaded 80 → 1, index entries loaded 827 → 602 (-27.2%), table-open step 5.32 → 0.33 ms, WAL replay step 0.25 → 0.37 ms); S2 (100,000) churn: 0.061 → 0.053 s (-12.7%; tables loaded 2 → 1, index entries loaded 4,724 → 4,724 (+0.0%), table-open step 2.08 → 2.10 ms, WAL replay step 50.54 → 48.48 ms); S3 (1,000,000) churn: 0.076 → 0.063 s (-17.2%; tables loaded 31 → 1, index entries loaded 75,722 → 60,435 (-20.2%), table-open step 35.09 → 24.83 ms, WAL replay step 33.84 → 31.80 ms); S4 (5,000,000) churn: 0.230 → 0.181 s (-21.1%; tables loaded 158 → 1, index entries loaded 387,442 → 300,980 (-22.3%), table-open step 173.81 → 135.27 ms, WAL replay step 47.48 → 48.35 ms); S5 (10,000,000) churn: 0.404 → 0.310 s (-23.3%; tables loaded 317 → 1, index entries loaded 777,686 → 602,047 (-22.6%), table-open step 340.12 → 250.78 ms, WAL replay step 56.33 → 59.89 ms); S1s (10,000; 16 KiB limit) control: 0.006 → 0.001 s (-80.7%; tables loaded 67 → 1, index entries loaded 670 → 620 (-7.5%), table-open step 4.43 → 0.37 ms, WAL replay step 0.16 → 0.27 ms); S2 (100,000) control: 0.027 → 0.029 s (+9.8%; tables loaded 2 → 1, index entries loaded 4,724 → 4,724 (+0.0%), table-open step 2.20 → 2.07 ms, WAL replay step 23.54 → 24.75 ms); S3 (1,000,000) control: 0.048 → 0.044 s (-9.8%; tables loaded 26 → 1, index entries loaded 61,412 → 61,404 (-0.0%), table-open step 28.16 → 24.87 ms, WAL replay step 18.12 → 16.56 ms); S4 (5,000,000) control: 0.155 → 0.151 s (-2.5%; tables loaded 132 → 1, index entries loaded 311,784 → 311,743 (-0.0%), table-open step 146.47 → 144.77 ms, WAL replay step 10.09 → 13.80 ms); S5 (10,000,000) control: 0.295 → 0.317 s (+7.3%; tables loaded 264 → 1, index entries loaded 623,568 → 623,486 (-0.0%), table-open step 275.63 → 290.97 ms, WAL replay step 24.27 → 22.91 ms). Compaction doesn't touch the WAL or the memtable, so the WAL entries replayed are the same before and after; the measured open time is the table-open step (each table's footer, index block and Bloom filter are read and validated) plus the WAL replay, and only the first depends on the table set. The pattern across rows is that open time moves with the number of index entries and filter bytes loaded, not with the number of tables: where compaction removed stale records (churn, 1M and above) the entries and filter bytes fell and so did the open time by a similar fraction; in the control workloads the tables fell to one but the entries and filter bytes didn't change, and neither did the open time beyond the between-run spread. That is what the measured components support; this benchmark doesn't isolate the per-table overhead from the per-entry cost in a controlled experiment, so it doesn't claim the table count has no effect. The component columns are separate re-runs of those steps.
+
+**6. Memory.** S1s (10,000; 16 KiB limit) churn: opening adds 0.0 MB → 0.0 MB of private bytes; compaction's peak working set rose 1.7 MB above the opened store; S2 (100,000) churn: opening adds 8.3 MB → 8.4 MB of private bytes; compaction's peak working set rose 1.3 MB above the opened store; S3 (1,000,000) churn: opening adds 15.3 MB → 12.2 MB of private bytes; compaction's peak working set rose 12.4 MB above the opened store; S4 (5,000,000) churn: opening adds 55.1 MB → 42.5 MB of private bytes; compaction's peak working set rose 59.2 MB above the opened store; S5 (10,000,000) churn: opening adds 101.2 MB → 78.7 MB of private bytes; compaction's peak working set rose 117.5 MB above the opened store. The merge streams its input and output, so it never holds the database (compare the SSTable bytes in the tables above), but its peak working memory isn't constant: it grows with the number of records, at roughly the same rate per record across the scales that have a measurable peak. The measurement doesn't say which structures account for it; candidates that scale with the record count are the output table's Bloom filter and sparse index (both built in memory before they are written) and the new table's in-memory index being loaded while the old tables are still loaded, but this wasn't separated. After compaction the opened store holds less memory only where records were removed (the index and Bloom filter shrink with the record count). Memory was probed on the churn workload only.
+
+**7. Cache.** S1s (10,000; 16 KiB limit) churn: hit rate 89.0% → 87.8%; GETs of absent or deleted keys that accessed a block 8,725 → 125 (summed over 5 runs), and 8,625 of the 29,335 GETs served from the cache before compaction were such GETs; S2 (100,000) churn: hit rate 28.0% → 27.7%; GETs of absent or deleted keys that accessed a block 15 → 25 (summed over 5 runs), and 10 of the 4,405 GETs served from the cache before compaction were such GETs; S3 (1,000,000) churn: hit rate 2.0% → 1.7%; GETs of absent or deleted keys that accessed a block 680 → 15 (summed over 5 runs), and 65 of the 170 GETs served from the cache before compaction were such GETs; S4 (5,000,000) churn: hit rate 1.6% → 0.4%; GETs of absent or deleted keys that accessed a block 318 → 0 (summed over 3 runs), and 21 of the 27 GETs served from the cache before compaction were such GETs; S5 (10,000,000) churn: hit rate 2.7% → 0.1%; GETs of absent or deleted keys that accessed a block 408 → 3 (summed over 3 runs), and 27 of the 30 GETs served from the cache before compaction were such GETs. The hit-key GETs are uniform over the keyspace and revisit almost no block, so the cache has little to do in this workload (as in V5's standard workload). From 1M records upward, GETs of absent or deleted keys access a block before compaction only when a table's Bloom filter lets them through (a false positive) or a tombstone must be read, and after compaction they access (almost) none, because the one table's filter rules them out; the cache hits that those GETs produced before compaction disappear with them, which is what lowers the hit rate. The per-GET outcomes in the results JSON support this reading; it isn't a sign of the cache working worse. At 100,000 keys and in the 16 KiB configuration the hit rate barely changes.
+
+## 11. Limitations and unexplained findings
+
+- **Warm OS cache only.** No cold-cache measurement is made or claimed. The merge's reads and the post-compaction table's first reads are served from the page cache, so a cold database would pay disk time in both stages and the compaction itself would be more I/O-bound.
+- **Timing sensitivity.** Timings on this machine are sensitive to concurrent load. The between-run spread of every p50 and of every compaction wall time is in the tables, and a before/after difference within about twice that spread is not resolved (the analysis labels such rows).
+- **p95 and p99 at the large scales rest on few samples.** Miss-like phases have 500 pooled samples at S3 (1,000,000) churn, 500 pooled samples at S3 (1,000,000) control, 150 pooled samples at S4 (5,000,000) churn, 50 pooled samples at S4 (5,000,000) control, 150 pooled samples at S5 (10,000,000) churn and 50 pooled samples at S5 (10,000,000) control. With that few samples the p99 is the largest or second-largest observation of the pool, so read it as an order of magnitude.
+- **The churn workload is one specific shape.** It uses uniformly drawn overwrites (20% of the keys' worth), distinct deletes (5%), 10% of the deletes resurrected, and 5% of the overwrites empty-valued, in ten rounds over an ascending load. The stale fraction, tombstone share and table overlap that compaction removes follow from that shape. A different update distribution would give different physical-reduction numbers, and the control workload (every key once) bounds the other end.
+- **Full compaction cost grows with the database.** The merge touches every record of every table twice. The per-record cost is in the compaction table for every scale. Nothing here measures partial or background compaction, which V6 doesn't implement. Reads and writes are blocked while it runs.
+- **Control runs.** The control workload has 5 run(s) at S1 (10,000), 5 run(s) at S2 (100,000), 5 run(s) at S3 (1,000,000), 1 run(s) at S4 (5,000,000), 1 run(s) at S5 (10,000,000); a single run has no between-run spread.
+- **Peak disk use** during compaction is roughly the input tables plus the output (not measured separately here).
+- **Bytes read** by compaction are the store's logical count (record-region bytes per pass) and the Python-level counted bytes in the instrumented probe. Operating-system read-ahead, filesystem and antivirus activity aren't measured. `fsync` counts are calls, not physical flushes, and directory fsync is a no-op on Windows.
+- **The Bloom false-positive rate of the merged table** isn't re-measured here (V4 measured it by table size). The read-work samples show false positives per GET, which is the quantity that matters to latency.
+- **Unexplained: the GET-hit latency after compaction.** It's 23.9 µs at 100,000 keys but 60.9, 57.4 and 63.0 µs at 1M, 5M and 10M, though the store then holds one table at every scale and one block is read per hit. The 100K database has a block-cache hit rate of 27.7% (a hit avoids opening the file) against 1.7% and below at the larger scales, which is consistent with part of the difference. Larger index and filter structures may account for the rest. This wasn't isolated, and no cause is claimed.
+- **Unexplained: churn and control differ at 10M after compaction.** The control hit p50 is 81.4 µs (one run) against 63.0 µs for the churn workload (three runs, between-run spread of the p50 21.1%), and the control compacted table is larger by 343,027 records. A single run has no spread to compare with, so it isn't known whether this difference exceeds run-to-run variation.
+- **At 100,000 keys the churn leaves no stale data in the flushed tables.** The churn phase's writes (25,500 operations) fit in the memtable together with the load's tail, so the two flushed tables contain every key once (0 stale records, 0 tombstones). Compaction there is a pure merge of two tables, and its row differs from the control row only through measurement variation. Stale data appears from 1M records upward.
+- **Reading the before/after latency.** The after-compaction GETs run in the same process and after the before-compaction GETs. The order is fixed, and this benchmark can't separate an order effect (allocator and interpreter state) from the compaction effect, except through the no-op rows, which show the size of the variation between two identical GET stages.

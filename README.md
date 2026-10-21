@@ -1,6 +1,6 @@
 # lsm-store
 
-A persistent key-value store in Python, built from scratch as a sequence of seven versions. V0 is an append-only file that scans everything on every read, and V6 is a log-structured merge-tree with a write-ahead log, a memtable, SSTables with sparse indexes and Bloom filters, a block cache and compaction. Each version changes one thing, is tested for correctness, and V1 to V5 are each benchmarked against the previous version with the same workloads.
+A persistent key-value store in Python, built from scratch as a sequence of seven versions. V0 is an append-only file that scans everything on every read, and V6 is a log-structured merge-tree with a write-ahead log, a memtable, SSTables with sparse indexes and Bloom filters, a block cache and compaction. Each version changes one thing, is tested for correctness, and is benchmarked against the previous one with the same workloads.
 
 V6 is the current version and completes the planned evolution from the V0 baseline to a compact LSM-style storage engine.
 
@@ -37,6 +37,41 @@ A store is a directory of `wal-*.log` segments and `sst-*.sst` / `cmp-*.sst` tab
 | V6 | explicit full compaction into one table | [v6-design.md](docs/v6-design.md) |
 
 `KVStore` is edited in place from version to version; each version's design is described in its own doc. V3 to V6 can read tables written by the earlier table formats, but V2 to V5 can't read a directory that contains V6's `cmp-*` tables.
+
+## Results at 10 million records
+
+Median latency and open time at the largest scale (10,000,000 records, 11-byte keys, 100-byte values, `sync=False`), from [docs/benchmarks.md](docs/benchmarks.md#v0--v6-summary). V6 is shown after one compaction of the churn workload (overwrites and deletes, so there's stale data to remove).
+
+| version | GET hit p50 | GET miss p50 | open time |
+|---|---|---|---|
+| V0 | 7,841,657 µs | 7,901,652 µs | 7.81 s |
+| V1 | 0.8 µs | 0.6 µs | 11.02 s |
+| V2 | 29,664 µs | 13,167,709 µs | 0.078 s |
+| V3 | 107.7 µs | 14,500 µs | 0.353 s |
+| V4 | 282.4 µs | 556.0 µs | 0.359 s |
+| V5 | 265.5 µs | 507.5 µs | 0.344 s |
+| V6 (churn, after compact) | 63.0 µs | 2.2 µs | 0.310 s |
+
+What the table shows and what it doesn't:
+
+- V1's latency is a dictionary lookup, but it holds the whole database in memory (2,273 MB of private bytes at 10M keys) and replays the whole WAL on open. V2 onward bound both.
+- The sparse index (V3) cut hit latency from tens of milliseconds to about 100 µs but left misses scanning one block per table. The Bloom filter (V4) removed most of that miss cost.
+- V4's and V5's hit latency is higher than V3's at this scale. Without compaction a 10M-record database has 264 flushed tables, and a miss evaluates a filter in every one of them. V6 removes that: before compaction the churn workload's miss p50 is 650.2 µs, and after it's 2.2 µs.
+- The block cache (V5) helps only when blocks are revisited. The standard workload draws keys uniformly, so from 1M records up its hit rate is 1.4% to 1.9% and V5 is close to V4. In a separate locality workload (90% of GETs on 1,000 hot blocks), p50 falls from 73.1 µs on V4 to 36.1 µs with a 4 MiB cache.
+- Compaction isn't free: it reads every input record twice and rewrites the survivors. Its measured cost per scale, and what it frees, are in the V6 section of the benchmark doc.
+
+## Benchmark methodology
+
+Benchmarks live in `benchmarks/`. Workloads are seeded and deterministic, each run uses a fresh database, and only the store call is timed (`perf_counter_ns` per operation). Scales run from 10,000 to 10,000,000 records with 3 to 5 runs each, and percentiles are pooled across runs. The workload definitions are shared across versions so results are comparable.
+
+Limits that matter when reading the numbers:
+
+- Every figure is a warm OS page cache number on one machine (Windows 11, Python 3.10.6). There's no cold-cache measurement, and "block read" means a read served from the page cache.
+- Physical I/O isn't measured. Records decoded, bytes scanned, tables consulted and the amplification figures are application-level or derived from the file formats, and the docs label which is which.
+- Timings are sensitive to machine load. Differences within about twice the between-run spread are treated as unresolved.
+- Large-scale p99 values rest on few samples (150 pooled at the 5M and 10M miss phases).
+
+Workloads, results, derived metrics and the full list of limitations are in [docs/benchmarks.md](docs/benchmarks.md).
 
 ## Usage
 
